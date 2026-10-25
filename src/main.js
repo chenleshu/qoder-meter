@@ -50,32 +50,40 @@ const PALETTE_DARK = {
   bg: col(0.075, 0.085, 0.112, 0.97),
   border: wht(1, 0.10),
   text: wht(0.96, 1),
-  soft: wht(0.74, 1),
-  gray: wht(0.56, 1),
-  faint: wht(0.38, 1),
+  soft: wht(0.76, 1),
+  gray: wht(0.58, 1),
+  faint: wht(0.40, 1),
   green: col(0.32, 0.88, 0.58, 1),
-  greenDim: col(0.40, 0.74, 0.56, 1),
+  greenDim: col(0.36, 0.74, 0.56, 1),
   gold: col(0.95, 0.76, 0.36, 1),
   red: col(0.96, 0.42, 0.38, 1),
   blue: col(0.46, 0.68, 1, 1),
   track: wht(1, 0.13),
-  divider: wht(1, 0.07)
+  divider: wht(1, 0.07),
+  greenTint: col(0.32, 0.88, 0.58, 0.14),
+  goldTint: col(0.95, 0.76, 0.36, 0.15),
+  grayTint: wht(1, 0.08),
+  blueTint: col(0.46, 0.68, 1, 0.14)
 };
 
 const PALETTE_LIGHT = {
-  bg: col(1, 1, 1, 0.97),
-  border: col(0.85, 0.87, 0.90, 1),
-  text: col(0.10, 0.12, 0.15, 1),
-  soft: col(0.32, 0.36, 0.42, 1),
-  gray: col(0.44, 0.48, 0.54, 1),
-  faint: col(0.56, 0.60, 0.66, 1),
-  green: col(0.03, 0.58, 0.40, 1),
-  greenDim: col(0.16, 0.55, 0.44, 1),
-  gold: col(0.66, 0.42, 0.08, 1),
+  bg: col(1, 1, 1, 0.98),
+  border: col(0.87, 0.89, 0.92, 1),
+  text: col(0.09, 0.11, 0.14, 1),
+  soft: col(0.28, 0.32, 0.38, 1),
+  gray: col(0.42, 0.46, 0.52, 1),
+  faint: col(0.58, 0.62, 0.68, 1),
+  green: col(0.04, 0.60, 0.42, 1),
+  greenDim: col(0.18, 0.56, 0.45, 1),
+  gold: col(0.68, 0.42, 0.08, 1),
   red: col(0.84, 0.16, 0.16, 1),
   blue: col(0.14, 0.38, 0.90, 1),
-  track: col(0.90, 0.92, 0.95, 1),
-  divider: col(0.90, 0.92, 0.95, 1)
+  track: col(0.91, 0.93, 0.96, 1),
+  divider: col(0.91, 0.93, 0.96, 1),
+  greenTint: col(0.04, 0.60, 0.42, 0.10),
+  goldTint: col(0.68, 0.42, 0.08, 0.11),
+  grayTint: col(0.42, 0.46, 0.52, 0.075),
+  blueTint: col(0.14, 0.38, 0.90, 0.10)
 };
 
 let T = PALETTE_LIGHT;
@@ -94,6 +102,7 @@ const state = {
   bottomRevealed: false,
   bottomOutside: false,
   bottomHoverAt: 0,
+  barMetricsCapacity: 0,
   recent: [],
   pinned: null,
   activeSessionId: null,
@@ -150,6 +159,11 @@ let bgBox = null;
 let titleLabel = null;
 let modelLabel = null;
 let dotBox = null;
+let dotHalo = null;
+let statusPill = null;
+let accentBar = null;
+let gripBox = null;
+let latencyPill = null;
 let tpsValue = null;
 let turnValue = null;
 let sessionAgeValue = null;
@@ -921,6 +935,11 @@ function resetUI() {
   titleLabel = null;
   modelLabel = null;
   dotBox = null;
+  dotHalo = null;
+  statusPill = null;
+  accentBar = null;
+  gripBox = null;
+  latencyPill = null;
   tpsValue = null;
   turnValue = null;
   sessionAgeValue = null;
@@ -957,16 +976,20 @@ function buildSidebar(root) {
   const W = CARD_W;
   const H = CARD_H;
 
-  dotBox = box([14, H - 22, 7, 7], T.gray, 3.5, 0, null);
+  dotHalo = box([12, H - 27, 13, 13], T.grayTint, 6.5, 0, null);
+  root.addSubview(dotHalo);
+  dotBox = box([15.5, H - 23.5, 6, 6], T.gray, 3, 0, null);
   root.addSubview(dotBox);
 
-  modelLabel = label('会话统计', [25, H - 28, 100, 14], 8.5, T.faint, $.NSFontWeightMedium, 0, true);
+  modelLabel = label('会话统计', [31, H - 29, 76, 15], 8.5, T.faint, $.NSFontWeightMedium, 0, true);
   root.addSubview(modelLabel);
 
-  stateLabel = label('', [W - 98, H - 28, 84, 14], 9, T.faint, $.NSFontWeightMedium, 2);
+  statusPill = box([W - 110, H - 31, 96, 19], T.grayTint, 9.5, 0, null);
+  root.addSubview(statusPill);
+  stateLabel = label('', [W - 108, H - 30, 92, 17], 8.8, T.faint, $.NSFontWeightMedium, 2);
   root.addSubview(stateLabel);
 
-  titleLabel = label('', [14, H - 52, W - 28, 20], 12.5, T.text, $.NSFontWeightSemibold, 0, true);
+  titleLabel = label('', [14, H - 53, W - 28, 20], 13, T.text, $.NSFontWeightSemibold, 0, true);
   root.addSubview(titleLabel);
 
   root.addSubview(label('本轮 TPS', [14, H - 72, 80, 12], 8.5, T.faint, $.NSFontWeightRegular));
@@ -983,6 +1006,7 @@ function buildSidebar(root) {
   }
 
   root.addSubview(box([14, H - 124, W - 28, 1], T.divider, 0, 0, null));
+  root.addSubview(box([114, 20, 1, 50], T.divider, 0, 0, null));
 
   root.addSubview(label('本轮', [14, H - 142, 80, 11], 8.5, T.faint, $.NSFontWeightRegular));
   turnValue = label('—', [14, H - 160, 94, 17], 12, T.text, $.NSFontWeightMedium);
@@ -1003,17 +1027,10 @@ function buildSidebar(root) {
   requestValue = label('', [14, 6, W - 48, 12], 8.5, T.faint, $.NSFontWeightRegular, 0, true);
   root.addSubview(requestValue);
 
-  root.addSubview(box([W / 2 - 14, H - 5, 28, 3], T.track, 1.5, 0, null));
+  gripBox = box([W / 2 - 14, H - 5, 28, 3], T.track, 1.5, 0, null);
+  root.addSubview(gripBox);
 
-  const gearLabel = label('⚙', [W - 26, 4, 16, 14], 11, T.faint, $.NSFontWeightRegular, 2);
-  root.addSubview(gearLabel);
-  const gearButton = $.NSButton.alloc.initWithFrame($.NSMakeRect(W - 28, 2, 20, 18));
-  gearButton.setBordered(false);
-  gearButton.setTitle('');
-  gearButton.setTarget(controller);
-  gearButton.setAction('openSettings:');
-  try { gearButton.setToolTip('设置'); } catch (e) {}
-  root.addSubview(gearButton);
+  addGearButton(root, W - 28, 3, 12, T.gray);
 }
 
 function buildBar(root, mode) {
@@ -1021,46 +1038,56 @@ function buildBar(root, mode) {
   const H = mode === 'title' ? BAR_H_TITLE : (mode === 'top' ? BAR_H_TOP : BAR_H_BOTTOM);
   const y = H === BAR_H_TITLE ? 5 : 7;
   const stateW = 70;
+  const latencyW = 68;
   const isTitleMode = mode === 'title';
 
-  dotBox = box([12, Math.round((H - 6) / 2), 6, 6], T.gray, 3, 0, null);
-  root.addSubview(dotBox);
-
-  let metricsX = 22;
-  if (!isTitleMode) {
-    const titleW = Math.max(90, Math.min(220, Math.round(W * 0.24)));
-    titleLabel = label('', [22, y, titleW, 15], 10.5,
-      T.text, $.NSFontWeightMedium, 0, true);
-    root.addSubview(titleLabel);
-    metricsX = 22 + titleW + 8;
-  }
-
-  const latencyW = 68;
   const stateX = W - stateW - 34;
   const latencyX = stateX - latencyW - 8;
-  const metricsW = Math.max(60, latencyX - metricsX - 8);
-  metricsLabel = label('', [metricsX, y, metricsW, 15], H === BAR_H_TITLE ? 9 : 9.5,
-    T.soft, $.NSFontWeightRegular, 0, true);
+
+  accentBar = box([12, H - 4, W - 24, 2], T.track, 1, 0, null);
+  root.addSubview(accentBar);
+
+  dotHalo = box([9, Math.round((H - 13) / 2), 13, 13], T.grayTint, 6.5, 0, null);
+  root.addSubview(dotHalo);
+  dotBox = box([12, Math.round((H - 7) / 2), 7, 7], T.gray, 3.5, 0, null);
+  root.addSubview(dotBox);
+
+  let tpsX = 22;
+  if (!isTitleMode) {
+    const titleW = Math.max(88, Math.min(210, Math.round(W * 0.22)));
+    titleLabel = label('', [26, y, titleW, 15], 10.5, T.text, $.NSFontWeightMedium, 0, true);
+    root.addSubview(titleLabel);
+    const dividerX = 26 + titleW + 5;
+    root.addSubview(box([dividerX, H === BAR_H_TITLE ? 6 : 8, 1, H === BAR_H_TITLE ? 12 : 14],
+      T.divider, 0, 0, null));
+    tpsX = dividerX + 8;
+  }
+
+  root.addSubview(label('TPS', [tpsX, y + 1, 22, 10], 8, T.faint, $.NSFontWeightRegular));
+  tpsValue = label('—', [tpsX + 19, y - 3, 48, 18], 13.5, T.green, $.NSFontWeightSemibold);
+  root.addSubview(tpsValue);
+  const metricsX = tpsX + 70;
+
+  const metricsW = Math.max(60, latencyX - metricsX - 10);
+  state.barMetricsCapacity = metricsW;
+  metricsLabel = label('', [metricsX, y, metricsW, 15],
+    H === BAR_H_TITLE ? 9 : 9.5, T.soft, $.NSFontWeightRegular, 0, true);
   root.addSubview(metricsLabel);
 
+  latencyPill = box([latencyX - 5, H === BAR_H_TITLE ? 4 : 6, latencyW + 6, 18],
+    T.grayTint, 9, 0, null);
+  root.addSubview(latencyPill);
   latencyValue = label('延迟 —', [latencyX, y, latencyW, 15], 9, T.gray, $.NSFontWeightRegular, 2);
   root.addSubview(latencyValue);
 
+  statusPill = box([stateX - 3, H === BAR_H_TITLE ? 4 : 6, stateW + 6, 18],
+    T.grayTint, 9, 0, null);
+  root.addSubview(statusPill);
   stateLabel = label('', [stateX, H === BAR_H_TITLE ? 5 : 8, stateW, 15],
     9, T.faint, $.NSFontWeightMedium, 2);
   root.addSubview(stateLabel);
 
-  const gearLabel = label('⚙', [W - 26, H === BAR_H_TITLE ? 4 : 6, 16, 16],
-    11, T.faint, $.NSFontWeightRegular, 2);
-  root.addSubview(gearLabel);
-  const gearButton = $.NSButton.alloc.initWithFrame(
-    $.NSMakeRect(W - 28, H === BAR_H_TITLE ? 2 : 4, 20, 18));
-  gearButton.setBordered(false);
-  gearButton.setTitle('');
-  gearButton.setTarget(controller);
-  gearButton.setAction('openSettings:');
-  try { gearButton.setToolTip('设置'); } catch (e) {}
-  root.addSubview(gearButton);
+  addGearButton(root, W - 26, Math.round((H - 18) / 2) + 0, 12, T.gray);
 }
 
 function buildIndicator(w) {
@@ -1181,6 +1208,27 @@ function dragEnd() {
   }
 }
 
+function addGearButton(root, x, y, size, tint) {
+  const pillSize = size + 6;
+  root.addSubview(box([x, y, pillSize, pillSize], T.grayTint, pillSize / 2, 0, null));
+  const iconX = x + (pillSize - size) / 2;
+  const iconY = y + (pillSize - size) / 2;
+  const img = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('gearshape', '设置');
+  const icon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(iconX, iconY, size, size));
+  if (img && !img.isNil()) {
+    icon.setImage(img);
+    try { icon.setContentTintColor(tint || T.gray); } catch (e) {}
+  }
+  root.addSubview(icon);
+  const button = $.NSButton.alloc.initWithFrame($.NSMakeRect(x - 2, y - 2, pillSize + 4, pillSize + 4));
+  button.setBordered(false);
+  button.setTitle('');
+  button.setTarget(controller);
+  button.setAction('openSettings:');
+  try { button.setToolTip('设置'); } catch (e) {}
+  root.addSubview(button);
+}
+
 function setText(field, text) {
   if (!field) return;
   const cur = field.stringValue;
@@ -1223,6 +1271,47 @@ function updateSparkline() {
   }
 }
 
+function setBarMetrics(size, turnText, ageText, outText, credits, requests, tools) {
+  if (!metricsLabel) return;
+  const fontReg = $.NSFont.monospacedDigitSystemFontOfSizeWeight(size, $.NSFontWeightRegular);
+  const fontMed = $.NSFont.monospacedDigitSystemFontOfSizeWeight(size, $.NSFontWeightMedium);
+  const m = $.NSMutableAttributedString.alloc.init;
+  function add(text, color, font) {
+    if (!text) return;
+    const seg = $.NSMutableAttributedString.alloc.init;
+    seg.mutableString.setString(text);
+    const range = $.NSMakeRange(0, text.length);
+    seg.addAttributeValueRange($.NSForegroundColorAttributeName, color, range);
+    seg.addAttributeValueRange($.NSFontAttributeName, font, range);
+    m.appendAttributedString(seg);
+  }
+  const cap = state.barMetricsCapacity || 999;
+  add('本轮 ', T.faint, fontReg);
+  add(turnText, T.text, fontMed);
+  add('  ·  ', T.track, fontReg);
+  add('总计 ', T.faint, fontReg);
+  add(ageText, T.text, fontMed);
+  if (cap >= 235) {
+    add('  ·  ', T.track, fontReg);
+    add('Token ', T.faint, fontReg);
+    add(outText, T.soft, fontMed);
+  }
+  if (cap >= 310) {
+    add('  ·  ', T.track, fontReg);
+    add('积分 ', T.faint, fontReg);
+    add(fmtCredits(credits), T.gold, fontMed);
+  }
+  if (cap >= 400) {
+    add('  ·  ', T.track, fontReg);
+    add(fmtCount(requests) + ' 请求', T.soft, fontReg);
+  }
+  if (cap >= 440) {
+    add('  ·  ', T.track, fontReg);
+    add('工具 ' + fmtCount(tools), T.soft, fontReg);
+  }
+  metricsLabel.setAttributedStringValue(m);
+}
+
 function updateUI() {
   if (!panel || !state.uiReady) return;
   const hasSession = !!state.sessionId;
@@ -1248,7 +1337,7 @@ function updateUI() {
 
   setText(titleLabel, hasSession ? truncate(state.title || '未命名会话', 60) : '等待 Qoder 会话');
   if (modelLabel) {
-    setText(modelLabel, '会话统计 · ' + (state.model || 'Qoder'));
+    setText(modelLabel, '会话统计');
   }
 
   if (state.layout === 'sidebar') {
@@ -1260,32 +1349,28 @@ function updateUI() {
     setText(requestValue, '延迟 ' + latencyText + ' · ' + fmtCount(requestCount) +
       ' 请求 · ' + fmtCount(toolCount) + ' 工具');
     updateSparkline();
-  } else if (metricsLabel) {
-    setText(metricsLabel,
-      'TPS ' + tpsText +
-      '  ·  本轮 ' + turnText +
-      '  ·  总计 ' + ageText +
-      '  ·  Token ' + outText +
-      '  ·  积分 ' + fmtCredits(state.credits) +
-      '  ·  ' + fmtCount(requestCount) + ' 请求' +
-      '  ·  工具 ' + fmtCount(toolCount));
+  } else {
+    setText(tpsValue, tpsText);
+    setBarMetrics(state.layout === 'title' ? 9 : 9.5, turnText, ageText, outText,
+      state.credits, requestCount, toolCount);
     if (latencyValue) {
       setText(latencyValue, '延迟 ' + latencyText);
       setColor(latencyValue, state.lastLatency ? T.gray : T.faint);
+      if (latencyPill) latencyPill.setFillColor(state.lastLatency ? T.grayTint : T.track);
     }
   }
 
-  if (state.inFlight) {
-    dotBox.setFillColor(T.green);
-    setText(stateLabel, '生成中 ' + fmtElapsed(state.inFlightElapsed));
-    setColor(stateLabel, T.green);
-    setColor(tpsValue, T.green);
-  } else {
-    dotBox.setFillColor(active ? T.gold : T.gray);
-    setText(stateLabel, active ? '本轮中' : (hasSession ? '空闲' : ''));
-    setColor(stateLabel, active ? T.gold : T.faint);
-    setColor(tpsValue, state.tps ? T.greenDim : T.faint);
-  }
+  const statusColor = state.inFlight ? T.green : (active ? T.gold : T.gray);
+  const statusTint = state.inFlight ? T.greenTint : (active ? T.goldTint : T.grayTint);
+  if (dotHalo) dotHalo.setFillColor(statusTint);
+  if (dotBox) dotBox.setFillColor(statusColor);
+  if (statusPill) statusPill.setFillColor(statusTint);
+  if (accentBar) accentBar.setFillColor(state.inFlight ? T.green : (active ? T.gold : T.track));
+  if (gripBox) gripBox.setFillColor(state.inFlight ? T.green : (active ? T.gold : T.track));
+  setText(stateLabel, state.inFlight ? ('生成中 ' + fmtElapsed(state.inFlightElapsed))
+    : (active ? '本轮中' : (hasSession ? '空闲' : '')));
+  setColor(stateLabel, state.inFlight ? T.green : (active ? T.gold : T.faint));
+  setColor(tpsValue, state.inFlight ? T.green : (state.tps ? T.greenDim : T.faint));
 
   const exactNote = state.exactOut > 0 ? 'Token 精确值'
     : 'Token 按字符估算（模型未返回精确值），积分来自 Qoder 本地账单';
@@ -1665,8 +1750,16 @@ function buildSettingsWindow() {
   settingsPanel.setLevel(26);
 
   const root = settingsPanel.contentView;
-  root.addSubview(sLabel('Qoder Meter', [20, 482, 340, 24], 17, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('状态条显示、启动与会话跟随', [22, 462, 340, 16], 11, $.NSFontWeightRegular,
+  root.addSubview(box([20, 474, 28, 28], T.greenTint, 8, 0, null));
+  const headerIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26, 480, 16, 16));
+  const headerImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('gauge', 'Qoder Meter');
+  if (headerImage && !headerImage.isNil()) {
+    headerIcon.setImage(headerImage);
+    try { headerIcon.setContentTintColor(T.green); } catch (e) {}
+  }
+  root.addSubview(headerIcon);
+  root.addSubview(sLabel('Qoder Meter', [58, 482, 300, 24], 17, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('状态条显示、启动与会话跟随', [60, 462, 300, 16], 11, $.NSFontWeightRegular,
     $.NSColor.secondaryLabelColor));
 
   root.addSubview(sLabel('启动与退出', [20, 432, 340, 18], 11, $.NSFontWeightSemibold));
