@@ -11,6 +11,7 @@
  */
 
 ObjC.import('Cocoa');
+ObjC.import('CoreGraphics');
 
 const CA = Application.currentApplication();
 CA.includeStandardAdditions = true;
@@ -102,6 +103,9 @@ const state = {
   bottomRevealed: false,
   bottomOutside: false,
   bottomHoverAt: 0,
+  qoderFullscreen: false,
+  topRevealed: false,
+  topHoverAt: 0,
   updateUrl: null,
   updateChecking: false,
   barMetricsCapacity: 0,
@@ -424,6 +428,37 @@ function queryPayload() {
   const rows = JSON.parse(out);
   if (!rows || !rows.length || !rows[0].payload) return null;
   return JSON.parse(rows[0].payload);
+}
+
+function readQoderWindowBounds() {
+  try {
+    const ref = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID);
+    if (!ref) return null;
+    const arr = ObjC.castRefToObject(ref);
+    let best = null;
+    for (let i = 0; i < arr.count; i++) {
+      const d = arr.objectAtIndex(i);
+      const owner = String(ObjC.unwrap(d.objectForKey('kCGWindowOwnerName')) || '');
+      if (owner !== 'Qoder') continue;
+      const layer = Number(ObjC.unwrap(d.objectForKey('kCGWindowLayer')) || 0);
+      if (layer !== 0) continue;
+      const alpha = Number(ObjC.unwrap(d.objectForKey('kCGWindowAlpha')) || 0);
+      if (alpha <= 0) continue;
+      const u = ObjC.unwrap(d.objectForKey('kCGWindowBounds'));
+      if (!u) continue;
+      const x = Number(ObjC.unwrap(u.X));
+      const y = Number(ObjC.unwrap(u.Y));
+      const width = Number(ObjC.unwrap(u.Width));
+      const height = Number(ObjC.unwrap(u.Height));
+      if (!isFinite(x) || !isFinite(y) || width < 320 || height < 240) continue;
+      if (!best || width * height > best.width * best.height) {
+        best = { x: x, y: y, width: width, height: height };
+      }
+    }
+    return best;
+  } catch (e) {
+    return null;
+  }
 }
 
 function scanRouteFile(path) {
@@ -1101,7 +1136,7 @@ function buildIndicator(w) {
   }
   indicatorPanel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
     $.NSMakeRect(0, 0, w, 4), 128, $.NSBackingStoreBuffered, false);
-  indicatorPanel.setLevel($.NSStatusWindowLevel);
+  indicatorPanel.setLevel(3);
   indicatorPanel.setCollectionBehavior(1 | 256 | 16);
   indicatorPanel.setOpaque(false);
   indicatorPanel.setBackgroundColor($.NSColor.clearColor);
@@ -1148,7 +1183,9 @@ function buildUI(mode) {
     indicatorPanel.orderOut(null);
     indicatorPanel = null;
   }
-  if (state.layout === 'bottom') buildIndicator(state.widths.bottom);
+  if (state.layout === 'bottom' || state.layout === 'top') {
+    buildIndicator(state.widths[state.layout]);
+  }
 
   panel.orderOut(null);
   state.uiReady = true;
@@ -1425,6 +1462,8 @@ function applyWindowLayout() {
   const screen = $.NSScreen.mainScreen;
   const sw = Number(screen.frame.size.width);
   const sh = Number(screen.frame.size.height);
+  const topInset = Math.max(0, Math.round(sh - (Number(screen.visibleFrame.origin.y) +
+    Number(screen.visibleFrame.size.height))));
   const bottom = sh - (b.y + b.height);
   const isCard = state.layout === 'sidebar';
   const isTitle = state.layout === 'title';
@@ -1433,6 +1472,9 @@ function applyWindowLayout() {
   if (!isBottom) state.bottomOutside = false;
   const w = isCard ? CARD_W : (isTitle ? state.widths.title : (isTop ? state.widths.top : state.widths.bottom));
   const h = isCard ? CARD_H : (isTitle ? BAR_H_TITLE : (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
+  const isFullscreen = b.x <= 1 && b.y <= 1 && b.width >= sw - 2 && b.height >= sh - 2;
+  state.qoderFullscreen = isFullscreen;
+  if (!isTop) state.topRevealed = false;
 
   const saved = state.positions[state.layout];
   const hasSaved = !!(saved && isFinite(saved.dx) && isFinite(saved.dy));
@@ -1443,13 +1485,19 @@ function applyWindowLayout() {
     x = b.x + (hasSaved ? Number(saved.dx) : 300);
     y = bottom + b.height - h - 3;
   } else if (isTop) {
-    const roomAbove = (b.y - h - 4) >= 34;
-    if (roomAbove) {
-      x = b.x + 8;
-      y = bottom + b.height + 4;
+    if (isFullscreen) {
+      x = b.x + Math.round((b.width - w) / 2);
+      y = sh - topInset - h - 4;
     } else {
-      x = b.x + 300;
-      y = bottom + b.height - h - 3;
+      state.topRevealed = false;
+      const roomAbove = (b.y - h - 4) >= 34;
+      if (roomAbove) {
+        x = b.x + 8;
+        y = bottom + b.height + 4;
+      } else {
+        x = b.x + 300;
+        y = bottom + b.height - h - 3;
+      }
     }
   } else if (isBottom) {
     const visibleBottom = Number(screen.visibleFrame.origin.y);
@@ -1476,15 +1524,48 @@ function applyWindowLayout() {
 
   x = Math.round(x);
   y = Math.round(y);
+  const indicatorY = isTop ? (sh - topInset - 4) : bottom;
   if (state.lastX === x && state.lastY === y) {
-    if (indicatorPanel) indicatorPanel.setFrameOrigin($.NSMakePoint(x, bottom));
+    if (indicatorPanel) indicatorPanel.setFrameOrigin($.NSMakePoint(x, indicatorY));
     return;
   }
   state.lastX = x;
   state.lastY = y;
 
   panel.setFrameOrigin($.NSMakePoint(x, y));
-  if (indicatorPanel) indicatorPanel.setFrameOrigin($.NSMakePoint(x, bottom));
+  if (indicatorPanel) indicatorPanel.setFrameOrigin($.NSMakePoint(x, indicatorY));
+}
+
+function updateTopHover() {
+  if (state.layout !== 'top' || !state.qoderFullscreen || !state.windowBounds) {
+    if (state.topRevealed) state.topRevealed = false;
+    return;
+  }
+  try {
+    const b = state.windowBounds;
+    const screen = $.NSScreen.mainScreen;
+    const sw = Number(screen.frame.size.width);
+    const sh = Number(screen.frame.size.height);
+    const topInset = Math.max(0, Math.round(sh - (Number(screen.visibleFrame.origin.y) +
+      Number(screen.visibleFrame.size.height))));
+    const w = state.widths.top;
+    const h = BAR_H_TOP;
+    let x = b.x + Math.round((b.width - w) / 2);
+    if (x + w > sw - 8) x = Math.max(8, sw - w - 8);
+    if (x < 8) x = 8;
+    const m = $.NSEvent.mouseLocation;
+    const hover = state.topRevealed
+      ? (m.x >= x - 12 && m.x <= x + w + 12 &&
+         m.y >= sh - topInset - h - 18 && m.y <= sh - topInset + 8)
+      : (m.x >= x - 12 && m.x <= x + w + 12 &&
+         m.y >= sh - topInset - 10 && m.y <= sh - topInset + 8);
+    if (hover) {
+      state.topRevealed = true;
+      state.topHoverAt = Date.now();
+    } else if (state.topRevealed && Date.now() - state.topHoverAt > 1500) {
+      state.topRevealed = false;
+    }
+  } catch (e) {}
 }
 
 function refreshVisibility() {
@@ -1499,8 +1580,10 @@ function refreshVisibility() {
   const frontIsQoder = bid === 'com.qoder.app';
   if (frontIsQoder) state.lastQoderFrontAt = Date.now();
   const show = !state.panelHidden && state.qoderRunning && frontIsQoder;
+  const topCollapsed = state.layout === 'top' && state.qoderFullscreen && !state.topRevealed;
   const bottomCollapsed = state.layout === 'bottom' && !state.bottomOutside &&
-    state.bottomAutoHide && !state.bottomRevealed;
+    (state.bottomAutoHide || state.qoderFullscreen) && !state.bottomRevealed;
+  const collapsed = topCollapsed || bottomCollapsed;
 
   if (!show) {
     if (panel.isVisible) panel.orderOut(null);
@@ -1508,7 +1591,7 @@ function refreshVisibility() {
     return;
   }
 
-  if (bottomCollapsed) {
+  if (collapsed) {
     if (panel.isVisible) panel.orderOut(null);
     if (indicatorPanel && !indicatorPanel.isVisible) indicatorPanel.orderFront(null);
   } else {
@@ -1518,7 +1601,8 @@ function refreshVisibility() {
 }
 
 function updateBottomHover() {
-  if (state.layout !== 'bottom' || state.bottomOutside || !state.bottomAutoHide || !state.windowBounds) {
+  const autoHide = state.bottomAutoHide || state.qoderFullscreen;
+  if (state.layout !== 'bottom' || state.bottomOutside || !autoHide || !state.windowBounds) {
     if (state.bottomRevealed) {
       state.bottomRevealed = false;
       applyWindowLayout();
@@ -1846,6 +1930,7 @@ function buildSettingsWindow() {
   settingsPosPopup = sPopup(['侧边栏卡片（推荐）', '窗口标题栏（融入顶部）', '窗口上方（贴外）', '窗口下方（贴外）'],
     state.layout === 'sidebar' ? 0 : (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)),
     [118, 304, 282, 26], 'settingsPosChanged:');
+  try { settingsPosPopup.setToolTip('全屏时贴外形态会收成屏幕边缘细线，悬停展开'); } catch (e) {}
   root.addSubview(settingsPosPopup);
 
   root.addSubview(sLabel('状态条宽度', [20, 276, 90, 18], 11));
@@ -1938,7 +2023,9 @@ function setLayout(mode) {
     return;
   }
   state.layout = mode;
-  state.bottomRevealed = mode === 'bottom' ? !state.bottomAutoHide : false;
+  state.bottomRevealed = mode === 'bottom'
+    ? (!state.bottomAutoHide && !state.qoderFullscreen) : false;
+  state.topRevealed = false;
   state.lastX = null;
   state.lastY = null;
   saveSettings();
@@ -2438,8 +2525,11 @@ function tick() {
     if (state.inFlight && state.requestStartedAt) {
       state.inFlightElapsed = Math.max(0, (Date.now() - state.requestStartedAt) / 1000);
     }
+    const liveBounds = readQoderWindowBounds();
+    if (liveBounds) state.windowBounds = liveBounds;
     updateUI();
     updateBottomHover();
+    updateTopHover();
     applyWindowLayout();
     refreshVisibility();
   } catch (e) {
