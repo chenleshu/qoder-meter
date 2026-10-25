@@ -1035,12 +1035,18 @@ function buildBar(root, mode) {
     metricsX = 22 + titleW + 8;
   }
 
-  const metricsW = Math.max(60, W - metricsX - stateW - 40);
+  const latencyW = 68;
+  const stateX = W - stateW - 34;
+  const latencyX = stateX - latencyW - 8;
+  const metricsW = Math.max(60, latencyX - metricsX - 8);
   metricsLabel = label('', [metricsX, y, metricsW, 15], H === BAR_H_TITLE ? 9 : 9.5,
     T.soft, $.NSFontWeightRegular, 0, true);
   root.addSubview(metricsLabel);
 
-  stateLabel = label('', [W - stateW - 34, H === BAR_H_TITLE ? 5 : 8, stateW, 15],
+  latencyValue = label('延迟 —', [latencyX, y, latencyW, 15], 9, T.gray, $.NSFontWeightRegular, 2);
+  root.addSubview(latencyValue);
+
+  stateLabel = label('', [stateX, H === BAR_H_TITLE ? 5 : 8, stateW, 15],
     9, T.faint, $.NSFontWeightMedium, 2);
   root.addSubview(stateLabel);
 
@@ -1251,8 +1257,8 @@ function updateUI() {
     setText(sessionAgeValue, ageText);
     setText(outValue, outText);
     setText(creditsValue, fmtCredits(state.credits));
-    setText(requestValue, fmtCount(requestCount) + ' 请求 · ' + fmtCount(toolCount) +
-      ' 工具 · 延迟 ' + latencyText);
+    setText(requestValue, '延迟 ' + latencyText + ' · ' + fmtCount(requestCount) +
+      ' 请求 · ' + fmtCount(toolCount) + ' 工具');
     updateSparkline();
   } else if (metricsLabel) {
     setText(metricsLabel,
@@ -1262,8 +1268,11 @@ function updateUI() {
       '  ·  Token ' + outText +
       '  ·  积分 ' + fmtCredits(state.credits) +
       '  ·  ' + fmtCount(requestCount) + ' 请求' +
-      '  ·  工具 ' + fmtCount(toolCount) +
-      '  ·  延迟 ' + latencyText);
+      '  ·  工具 ' + fmtCount(toolCount));
+    if (latencyValue) {
+      setText(latencyValue, '延迟 ' + latencyText);
+      setColor(latencyValue, state.lastLatency ? T.gray : T.faint);
+    }
   }
 
   if (state.inFlight) {
