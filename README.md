@@ -20,7 +20,7 @@ Qoder Meter 是一个轻量的 macOS 菜单栏/浮窗工具，用只读方式读
     </td>
     <td align="center" width="50%">
       <img src="docs/screenshots/settings.png" width="330" alt="设置窗口"><br>
-      <sub>独立设置窗口（浮在 Qoder 之上）</sub>
+      <sub>独立设置窗口（含版本检查，浮在 Qoder 之上）</sub>
     </td>
   </tr>
 </table>
@@ -101,6 +101,8 @@ open QoderMeter.app
 ```
 
 `install.sh` 会构建并复制到 `~/Applications/QoderMeter.app`，然后启动。
+
+也可以从 [Releases](https://github.com/chenleshu/qoder-meter/releases) 下载打包好的应用。
 
 > 本项目使用 ad-hoc 本地签名，没有经过 Apple 公证。如果 macOS 首次阻止打开，请在“系统设置 → 隐私与安全性”中允许，或右键应用选择“打开”。
 
