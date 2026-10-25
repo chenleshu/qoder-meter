@@ -173,6 +173,7 @@ const state = {
   bottomHoverAt: 0,
   qoderFullscreen: false,
   topRevealed: false,
+  topInline: false,
   topHoverAt: 0,
   updateUrl: null,
   updateChecking: false,
@@ -1200,7 +1201,8 @@ function buildSidebar(root) {
 }
 
 function buildBar(root, mode) {
-  const W = mode === 'title' ? state.widths.title : (mode === 'top' ? state.widths.top : state.widths.bottom);
+  const W = mode === 'title' ? titleBarWidth() :
+    (mode === 'top' ? state.widths.top : state.widths.bottom);
   const H = mode === 'title' ? BAR_H_TITLE : (mode === 'top' ? BAR_H_TOP : BAR_H_BOTTOM);
   const y = H === BAR_H_TITLE ? 6 : 8;
   const stateW = 84;
@@ -1276,6 +1278,12 @@ function buildIndicator(w) {
   indicatorPanel.orderOut(null);
 }
 
+function titleBarWidth() {
+  const b = state.windowBounds;
+  const avail = b && isFinite(b.width) ? b.width - 360 : 560;
+  return Math.max(460, Math.min(520, Math.round(avail)));
+}
+
 function buildUI(mode) {
   state.uiReady = false;
   state.layout = mode || 'sidebar';
@@ -1286,22 +1294,23 @@ function buildUI(mode) {
   const isCard = state.layout === 'sidebar';
   const isTitle = state.layout === 'title';
   const isTop = state.layout === 'top';
-  const w = isCard ? CARD_W : (isTitle ? state.widths.title : (isTop ? state.widths.top : state.widths.bottom));
-  const h = isCard ? CARD_H : (isTitle ? BAR_H_TITLE : (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
+  const inline = isTitle || (isTop && state.topInline);
+  const w = isCard ? CARD_W : (inline ? titleBarWidth() :
+    (isTop ? state.widths.top : state.widths.bottom));
+  const h = isCard ? CARD_H : (inline ? BAR_H_TITLE :
+    (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
   const root = makePanel(w, h);
-  panel.setHasShadow(!isTitle);
+  panel.setHasShadow(true);
 
-  bgBox = isTitle
-    ? box([0, 0, w, h], $.NSColor.clearColor, 0, 0, null)
-    : box([0, 0, w, h], T.bg, isCard ? 14 : 12, 1, T.border);
+  bgBox = box([0, 0, w, h], T.bg, isCard ? 14 : 12, 1, T.border);
   root.addSubview(bgBox);
 
   if (isCard) buildSidebar(root);
-  else buildBar(root, state.layout);
+  else buildBar(root, inline ? 'title' : state.layout);
 
-  const dragHeight = isCard ? 64 : (isTitle ? h : 0);
+  const dragHeight = isCard ? 64 : (inline ? h : 0);
   if (dragHeight > 0) {
-    const dragWidth = isTitle ? Math.max(0, w - 30) : w;
+    const dragWidth = inline ? Math.max(0, w - 30) : w;
     dragView = $.MeterDragView.alloc.initWithFrame($.NSMakeRect(0, h - dragHeight, dragWidth, dragHeight));
     root.addSubview(dragView);
   }
@@ -1597,10 +1606,24 @@ function applyWindowLayout() {
   const isTop = state.layout === 'top';
   const isBottom = state.layout === 'bottom';
   if (!isBottom) state.bottomOutside = false;
-  const w = isCard ? CARD_W : (isTitle ? state.widths.title : (isTop ? state.widths.top : state.widths.bottom));
-  const h = isCard ? CARD_H : (isTitle ? BAR_H_TITLE : (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
   const isFullscreen = b.x <= 1 && b.y <= 1 && b.width >= sw - 2 && b.height >= sh - 2;
   state.qoderFullscreen = isFullscreen;
+  const roomAbove = (b.y - BAR_H_TOP - 4) >= 34;
+  if (isTop) {
+    const wantInline = !isFullscreen && !roomAbove;
+    if (wantInline !== state.topInline) {
+      state.topInline = wantInline;
+      state.lastX = null;
+      state.lastY = null;
+      rebuildPanelUI();
+      return;
+    }
+  }
+  const inline = isTitle || (isTop && state.topInline);
+  const w = isCard ? CARD_W : (inline ? titleBarWidth() :
+    (isTop ? state.widths.top : state.widths.bottom));
+  const h = isCard ? CARD_H : (inline ? BAR_H_TITLE :
+    (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
   if (!isTop) state.topRevealed = false;
 
   const saved = state.positions[state.layout];
@@ -1609,22 +1632,19 @@ function applyWindowLayout() {
   let y;
 
   if (isTitle) {
-    x = b.x + (hasSaved ? Number(saved.dx) : 300);
+    x = b.x + (hasSaved ? Number(saved.dx) : (b.width - w - 12));
     y = bottom + b.height - h - 3;
   } else if (isTop) {
     if (isFullscreen) {
       x = b.x + Math.round((b.width - w) / 2);
       y = sh - topInset - h - 4;
-    } else {
+    } else if (inline) {
       state.topRevealed = false;
-      const roomAbove = (b.y - h - 4) >= 34;
-      if (roomAbove) {
-        x = b.x + 8;
-        y = bottom + b.height + 4;
-      } else {
-        x = b.x + 300;
-        y = bottom + b.height - h - 3;
-      }
+      x = b.x + (hasSaved ? Number(saved.dx) : (b.width - w - 12));
+      y = bottom + b.height - h - 3;
+    } else {
+      x = b.x + 8;
+      y = bottom + b.height + 4;
     }
   } else if (isBottom) {
     const visibleBottom = Number(screen.visibleFrame.origin.y);
@@ -2065,12 +2085,12 @@ function buildSettingsWindow() {
   try { settingsPosPopup.setToolTip('全屏时贴外形态会收成屏幕边缘细线，悬停展开'); } catch (e) {}
   root.addSubview(settingsPosPopup);
 
-  root.addSubview(sLabel('状态条宽度', [20, 276, 90, 18], 11));
-  const currentWidth = state.layout === 'title' ? state.widths.title :
-    (state.layout === 'top' ? state.widths.top : state.widths.bottom);
+  root.addSubview(sLabel('贴外条宽度', [20, 276, 90, 18], 11));
+  const currentWidth = state.layout === 'top' ? state.widths.top : state.widths.bottom;
   const widthIndex = currentWidth <= 680 ? 0 : (currentWidth >= 880 ? 2 : 1);
   settingsWidthPopup = sPopup(['紧凑（640）', '标准（800）', '宽（960）'], widthIndex,
     [118, 272, 282, 26], 'settingsWidthChanged:');
+  try { settingsWidthPopup.setToolTip('仅影响窗口上方/下方贴外条；标题栏使用紧凑宽度'); } catch (e) {}
   root.addSubview(settingsWidthPopup);
 
   root.addSubview(sLabel('外观', [20, 244, 90, 18], 11));
@@ -2107,8 +2127,7 @@ function updateSettingsControls() {
     settingsBottomAutoHide.setState(state.bottomAutoHide ? 1 : 0);
     settingsPosPopup.selectItemAtIndex(state.layout === 'sidebar' ? 0 :
       (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)));
-    const width = state.layout === 'title' ? state.widths.title :
-      (state.layout === 'top' ? state.widths.top : state.widths.bottom);
+    const width = state.layout === 'bottom' ? state.widths.bottom : state.widths.top;
     settingsWidthPopup.selectItemAtIndex(width <= 680 ? 0 : (width >= 880 ? 2 : 1));
     settingsThemePopup.selectItemAtIndex(Math.max(0, SKIN_IDS.indexOf(state.theme)));
     const dark = state.resolvedSkin === 'graphite' || state.resolvedSkin === 'dusk';

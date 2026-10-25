@@ -23,8 +23,8 @@ set_plist() {
 set_plist CFBundleIdentifier string com.qoder.meter
 set_plist CFBundleName string "Qoder Meter"
 set_plist CFBundleDisplayName string "Qoder 状态条"
-set_plist CFBundleShortVersionString string "1.2.0"
-set_plist CFBundleVersion string "4"
+set_plist CFBundleShortVersionString string "1.2.1"
+set_plist CFBundleVersion string "5"
 set_plist LSUIElement bool true
 set_plist NSHighResolutionCapable bool true
 set_plist LSMinimumSystemVersion string "13.0"
