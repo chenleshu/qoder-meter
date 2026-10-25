@@ -1239,7 +1239,7 @@ function buildBar(root, mode) {
   const metricsW = Math.max(60, latencyX - metricsX - 10);
   state.barMetricsCapacity = metricsW;
   metricsLabel = label('', [metricsX, y, metricsW, 16],
-    H === BAR_H_TITLE ? 9.8 : 10, T.soft, $.NSFontWeightRegular, 0, true);
+    H === BAR_H_TITLE ? 9.5 : 10, T.soft, $.NSFontWeightRegular, 0, true);
   root.addSubview(metricsLabel);
 
   latencyPill = box([latencyX - 6, H === BAR_H_TITLE ? 5 : 7, latencyW + 8, 20],
@@ -1281,7 +1281,7 @@ function buildIndicator(w) {
 function titleBarWidth() {
   const b = state.windowBounds;
   const avail = b && isFinite(b.width) ? b.width - 360 : 560;
-  return Math.max(460, Math.min(520, Math.round(avail)));
+  return Math.max(520, Math.min(750, Math.round(avail)));
 }
 
 function buildUI(mode) {
