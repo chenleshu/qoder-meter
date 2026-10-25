@@ -31,11 +31,11 @@ const WATCH_LOG = SETTINGS_DIR + '/watch.log';
 const PAUSE_FLAG = SETTINGS_DIR + '/autostart-paused';
 const KEEP_FLAG = SETTINGS_DIR + '/keep-running';
 
-const BAR_H_TITLE = 26;
-const BAR_H_TOP = 30;
-const BAR_H_BOTTOM = 30;
-const CARD_W = 232;
-const CARD_H = 210;
+const BAR_H_TITLE = 28;
+const BAR_H_TOP = 32;
+const BAR_H_BOTTOM = 32;
+const CARD_W = 246;
+const CARD_H = 220;
 const POLL_SECONDS = 0.6;
 
 const CJK_RE = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/g;
@@ -47,47 +47,113 @@ const wht = function (w, a) {
   return $.NSColor.colorWithCalibratedWhiteAlpha(w, a);
 };
 
-const PALETTE_DARK = {
-  bg: col(0.075, 0.085, 0.112, 0.97),
-  border: wht(1, 0.10),
-  text: wht(0.96, 1),
-  soft: wht(0.76, 1),
-  gray: wht(0.58, 1),
-  faint: wht(0.40, 1),
-  green: col(0.32, 0.88, 0.58, 1),
-  greenDim: col(0.36, 0.74, 0.56, 1),
-  gold: col(0.95, 0.76, 0.36, 1),
-  red: col(0.96, 0.42, 0.38, 1),
-  blue: col(0.46, 0.68, 1, 1),
-  track: wht(1, 0.13),
-  divider: wht(1, 0.07),
-  greenTint: col(0.32, 0.88, 0.58, 0.14),
-  goldTint: col(0.95, 0.76, 0.36, 0.15),
-  grayTint: wht(1, 0.08),
-  blueTint: col(0.46, 0.68, 1, 0.14)
+const SKINS = {
+  paper: {
+    bg: col(1, 1, 1, 0.985),
+    border: col(0.87, 0.89, 0.92, 1),
+    text: col(0.08, 0.10, 0.13, 1),
+    soft: col(0.28, 0.32, 0.38, 1),
+    gray: col(0.43, 0.47, 0.53, 1),
+    faint: col(0.59, 0.63, 0.69, 1),
+    green: col(0.03, 0.58, 0.40, 1),
+    greenDim: col(0.16, 0.55, 0.44, 1),
+    gold: col(0.66, 0.41, 0.07, 1),
+    red: col(0.84, 0.16, 0.16, 1),
+    blue: col(0.14, 0.38, 0.90, 1),
+    track: col(0.92, 0.93, 0.95, 1),
+    divider: col(0.92, 0.93, 0.95, 1),
+    greenTint: col(0.03, 0.58, 0.40, 0.10),
+    goldTint: col(0.66, 0.41, 0.07, 0.11),
+    grayTint: col(0.42, 0.46, 0.52, 0.07),
+    blueTint: col(0.14, 0.38, 0.90, 0.10),
+    highlight: wht(1, 0.70)
+  },
+  graphite: {
+    bg: col(0.085, 0.095, 0.115, 0.975),
+    border: wht(1, 0.10),
+    text: wht(0.96, 1),
+    soft: wht(0.78, 1),
+    gray: wht(0.60, 1),
+    faint: wht(0.42, 1),
+    green: col(0.34, 0.88, 0.60, 1),
+    greenDim: col(0.38, 0.72, 0.56, 1),
+    gold: col(0.95, 0.78, 0.42, 1),
+    red: col(0.96, 0.44, 0.40, 1),
+    blue: col(0.52, 0.70, 1, 1),
+    track: wht(1, 0.13),
+    divider: wht(1, 0.075),
+    greenTint: col(0.34, 0.88, 0.60, 0.14),
+    goldTint: col(0.95, 0.78, 0.42, 0.15),
+    grayTint: wht(1, 0.08),
+    blueTint: col(0.52, 0.70, 1, 0.14),
+    highlight: wht(1, 0.06)
+  },
+  ocean: {
+    bg: col(0.955, 0.975, 0.995, 0.985),
+    border: col(0.80, 0.86, 0.92, 1),
+    text: col(0.06, 0.11, 0.18, 1),
+    soft: col(0.24, 0.32, 0.42, 1),
+    gray: col(0.40, 0.48, 0.57, 1),
+    faint: col(0.56, 0.63, 0.71, 1),
+    green: col(0.02, 0.50, 0.62, 1),
+    greenDim: col(0.10, 0.46, 0.56, 1),
+    gold: col(0.64, 0.42, 0.08, 1),
+    red: col(0.82, 0.20, 0.24, 1),
+    blue: col(0.10, 0.36, 0.82, 1),
+    track: col(0.88, 0.92, 0.97, 1),
+    divider: col(0.88, 0.92, 0.97, 1),
+    greenTint: col(0.02, 0.50, 0.62, 0.11),
+    goldTint: col(0.64, 0.42, 0.08, 0.11),
+    grayTint: col(0.30, 0.42, 0.55, 0.075),
+    blueTint: col(0.10, 0.36, 0.82, 0.10),
+    highlight: wht(1, 0.80)
+  },
+  dusk: {
+    bg: col(0.075, 0.085, 0.135, 0.975),
+    border: wht(1, 0.10),
+    text: wht(0.95, 1),
+    soft: wht(0.76, 1),
+    gray: wht(0.58, 1),
+    faint: wht(0.40, 1),
+    green: col(0.30, 0.78, 0.92, 1),
+    greenDim: col(0.32, 0.66, 0.82, 1),
+    gold: col(0.95, 0.76, 0.48, 1),
+    red: col(0.96, 0.45, 0.44, 1),
+    blue: col(0.58, 0.64, 1, 1),
+    track: wht(1, 0.12),
+    divider: wht(1, 0.075),
+    greenTint: col(0.30, 0.78, 0.92, 0.14),
+    goldTint: col(0.95, 0.76, 0.48, 0.15),
+    grayTint: wht(1, 0.08),
+    blueTint: col(0.58, 0.64, 1, 0.14),
+    highlight: wht(1, 0.06)
+  },
+  sand: {
+    bg: col(0.995, 0.975, 0.940, 0.985),
+    border: col(0.89, 0.85, 0.78, 1),
+    text: col(0.14, 0.11, 0.08, 1),
+    soft: col(0.34, 0.29, 0.23, 1),
+    gray: col(0.47, 0.42, 0.35, 1),
+    faint: col(0.61, 0.56, 0.48, 1),
+    green: col(0.28, 0.55, 0.30, 1),
+    greenDim: col(0.38, 0.53, 0.32, 1),
+    gold: col(0.66, 0.38, 0.04, 1),
+    red: col(0.82, 0.20, 0.18, 1),
+    blue: col(0.22, 0.38, 0.66, 1),
+    track: col(0.93, 0.90, 0.84, 1),
+    divider: col(0.93, 0.90, 0.84, 1),
+    greenTint: col(0.28, 0.55, 0.30, 0.11),
+    goldTint: col(0.66, 0.38, 0.04, 0.11),
+    grayTint: col(0.50, 0.42, 0.30, 0.075),
+    blueTint: col(0.22, 0.38, 0.66, 0.10),
+    highlight: wht(1, 0.55)
+  }
 };
 
-const PALETTE_LIGHT = {
-  bg: col(1, 1, 1, 0.98),
-  border: col(0.87, 0.89, 0.92, 1),
-  text: col(0.09, 0.11, 0.14, 1),
-  soft: col(0.28, 0.32, 0.38, 1),
-  gray: col(0.42, 0.46, 0.52, 1),
-  faint: col(0.58, 0.62, 0.68, 1),
-  green: col(0.04, 0.60, 0.42, 1),
-  greenDim: col(0.18, 0.56, 0.45, 1),
-  gold: col(0.68, 0.42, 0.08, 1),
-  red: col(0.84, 0.16, 0.16, 1),
-  blue: col(0.14, 0.38, 0.90, 1),
-  track: col(0.91, 0.93, 0.96, 1),
-  divider: col(0.91, 0.93, 0.96, 1),
-  greenTint: col(0.04, 0.60, 0.42, 0.10),
-  goldTint: col(0.68, 0.42, 0.08, 0.11),
-  grayTint: col(0.42, 0.46, 0.52, 0.075),
-  blueTint: col(0.14, 0.38, 0.90, 0.10)
-};
+const SKIN_IDS = ['auto', 'paper', 'graphite', 'ocean', 'dusk', 'sand'];
+const SKIN_NAMES = ['自动（跟随 Qoder）', '纸白', '石墨', '海盐', '暮色', '暖砂'];
 
-let T = PALETTE_LIGHT;
+let T = SKINS.paper;
 
 const state = {
   sessionId: null,
@@ -96,7 +162,9 @@ const state = {
   cwd: '',
   ctxStats: null,
   layout: 'sidebar',
-  theme: 'light',
+  theme: 'auto',
+  resolvedSkin: 'paper',
+  autoThemeAt: 0,
   positions: {},
   widths: { title: 800, top: 800, bottom: 800 },
   bottomAutoHide: true,
@@ -328,6 +396,58 @@ function pathJoin() {
   return parts.join('/').replace(/\/+/g, '/');
 }
 
+/* --------------------------------------------------------------- themes */
+
+function normalizeTheme(theme) {
+  if (theme === 'light') return 'paper';
+  if (theme === 'dark') return 'graphite';
+  return SKIN_IDS.indexOf(theme) >= 0 ? theme : 'auto';
+}
+
+function systemIsDark() {
+  try {
+    const name = $.NSApplication.sharedApplication.effectiveAppearance.name;
+    return String(name.js).toLowerCase().indexOf('dark') >= 0;
+  } catch (e) {
+    return false;
+  }
+}
+
+function qoderThemeMode() {
+  try {
+    let raw = '';
+    const dict = $.NSDictionary.dictionaryWithContentsOfFile(
+      HOME + '/Library/Preferences/com.qoder.app.plist');
+    if (dict && !dict.isNil()) {
+      const v = dict.objectForKey('QoderApplicationIconProjection');
+      if (v && !v.isNil() && v.js) raw = String(v.js);
+    }
+    if (!raw) {
+      raw = sh('/usr/bin/defaults read com.qoder.app QoderApplicationIconProjection 2>/dev/null');
+    }
+    if (!raw) return null;
+    const eff = raw.match(/"effectiveAppearance"\s*:\s*"([^"]+)"/);
+    if (eff) return eff[1];
+    const mode = raw.match(/"themeMode"\s*:\s*"([^"]+)"/);
+    if (mode && mode[1] !== 'auto') return mode[1];
+  } catch (e) {}
+  return null;
+}
+
+function resolveSkin(theme) {
+  const t = normalizeTheme(theme);
+  if (t !== 'auto') return t;
+  const qoderMode = qoderThemeMode();
+  if (qoderMode === 'dark') return 'graphite';
+  if (qoderMode === 'light') return 'paper';
+  return systemIsDark() ? 'graphite' : 'paper';
+}
+
+function applySkin() {
+  state.resolvedSkin = resolveSkin(state.theme);
+  T = SKINS[state.resolvedSkin] || SKINS.paper;
+}
+
 /* ------------------------------------------------------------ persistence */
 
 function loadSettings() {
@@ -344,8 +464,8 @@ function loadSettings() {
       if (layout === 'sidebar' || layout === 'title' || layout === 'top' || layout === 'bottom') {
         state.layout = layout;
       }
-      if (obj.theme === 'light' || obj.theme === 'dark') {
-        state.theme = obj.theme;
+      if (obj.theme) {
+        state.theme = normalizeTheme(obj.theme);
       }
       if (obj.positions && typeof obj.positions === 'object') {
         state.positions = obj.positions;
@@ -994,6 +1114,9 @@ function resetUI() {
 }
 
 function makePanel(w, h) {
+  if (panel) {
+    try { panel.orderOut(null); } catch (e) {}
+  }
   panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
     $.NSMakeRect(0, 0, w, h),
     128, // borderless + nonactivating
@@ -1015,118 +1138,120 @@ function buildSidebar(root) {
   const W = CARD_W;
   const H = CARD_H;
 
-  dotHalo = box([12, H - 27, 13, 13], T.grayTint, 6.5, 0, null);
+  root.addSubview(box([14, H - 2, W - 28, 1], T.highlight, 0, 0, null));
+
+  dotHalo = box([12, H - 29, 14, 14], T.grayTint, 7, 0, null);
   root.addSubview(dotHalo);
-  dotBox = box([15.5, H - 23.5, 6, 6], T.gray, 3, 0, null);
+  dotBox = box([15.5, H - 25.5, 7, 7], T.gray, 3.5, 0, null);
   root.addSubview(dotBox);
 
-  modelLabel = label('会话统计', [31, H - 29, 76, 15], 8.5, T.faint, $.NSFontWeightMedium, 0, true);
+  modelLabel = label('会话统计', [32, H - 31, 80, 16], 9.2, T.faint, $.NSFontWeightMedium, 0, true);
   root.addSubview(modelLabel);
 
-  statusPill = box([W - 110, H - 31, 96, 19], T.grayTint, 9.5, 0, null);
+  statusPill = box([W - 116, H - 33, 102, 20], T.grayTint, 10, 0, null);
   root.addSubview(statusPill);
-  stateLabel = label('', [W - 108, H - 30, 92, 17], 8.8, T.faint, $.NSFontWeightMedium, 2);
+  stateLabel = label('', [W - 114, H - 32, 98, 18], 9.2, T.faint, $.NSFontWeightMedium, 2);
   root.addSubview(stateLabel);
 
-  titleLabel = label('', [14, H - 53, W - 28, 20], 13, T.text, $.NSFontWeightSemibold, 0, true);
+  titleLabel = label('', [14, H - 57, W - 28, 22], 14.2, T.text, $.NSFontWeightSemibold, 0, true);
   root.addSubview(titleLabel);
 
-  root.addSubview(label('本轮 TPS', [14, H - 72, 80, 12], 8.5, T.faint, $.NSFontWeightRegular));
-  tpsValue = label('—', [13, H - 108, 100, 36], 28, T.green, $.NSFontWeightSemibold);
+  root.addSubview(label('本轮 TPS', [14, H - 77, 90, 14], 9.2, T.faint, $.NSFontWeightRegular));
+  tpsValue = label('—', [13, H - 115, 110, 38], 30, T.green, $.NSFontWeightSemibold);
   root.addSubview(tpsValue);
-  root.addSubview(label('tok/s', [76, H - 100, 38, 12], 8.5, T.faint, $.NSFontWeightRegular));
+  root.addSubview(label('tok/s', [84, H - 107, 40, 14], 9.2, T.faint, $.NSFontWeightRegular));
 
-  root.addSubview(box([122, H - 116, 96, 1], T.divider, 0, 0, null));
+  root.addSubview(box([126, H - 121, 102, 1], T.divider, 0, 0, null));
   sparkBars = [];
   for (let i = 0; i < 14; i++) {
-    const b = box([124 + i * 6.8, H - 114, 4, 1], T.track, 2, 0, null);
+    const b = box([128 + i * 7, H - 119, 4.2, 1], T.track, 2.1, 0, null);
     root.addSubview(b);
     sparkBars.push(b);
   }
 
-  root.addSubview(box([14, H - 124, W - 28, 1], T.divider, 0, 0, null));
-  root.addSubview(box([114, 20, 1, 50], T.divider, 0, 0, null));
+  root.addSubview(box([14, H - 129, W - 28, 1], T.divider, 0, 0, null));
+  root.addSubview(box([122, 18, 1, 64], T.divider, 0, 0, null));
 
-  root.addSubview(label('本轮', [14, H - 142, 80, 11], 8.5, T.faint, $.NSFontWeightRegular));
-  turnValue = label('—', [14, H - 160, 94, 17], 12, T.text, $.NSFontWeightMedium);
+  root.addSubview(label('本轮', [14, H - 149, 90, 13], 9.2, T.faint, $.NSFontWeightRegular));
+  turnValue = label('—', [14, H - 168, 100, 18], 13, T.text, $.NSFontWeightMedium);
   root.addSubview(turnValue);
 
-  root.addSubview(label('总计', [120, H - 142, 80, 11], 8.5, T.faint, $.NSFontWeightRegular));
-  sessionAgeValue = label('—', [120, H - 160, 98, 17], 12, T.text, $.NSFontWeightMedium);
+  root.addSubview(label('总计', [130, H - 149, 90, 13], 9.2, T.faint, $.NSFontWeightRegular));
+  sessionAgeValue = label('—', [130, H - 168, W - 146, 18], 13, T.text, $.NSFontWeightMedium);
   root.addSubview(sessionAgeValue);
 
-  root.addSubview(label('Token', [14, H - 174, 60, 11], 8.5, T.faint, $.NSFontWeightRegular));
-  outValue = label('—', [14, H - 190, 94, 17], 12, T.text, $.NSFontWeightMedium);
+  root.addSubview(label('Token', [14, H - 183, 70, 13], 9.2, T.faint, $.NSFontWeightRegular));
+  outValue = label('—', [14, H - 201, 100, 18], 13, T.text, $.NSFontWeightMedium);
   root.addSubview(outValue);
 
-  root.addSubview(label('积分', [120, H - 174, 60, 11], 8.5, T.faint, $.NSFontWeightRegular));
-  creditsValue = label('0.00', [120, H - 190, 98, 17], 12, T.gold, $.NSFontWeightSemibold);
+  root.addSubview(label('积分', [130, H - 183, 70, 13], 9.2, T.faint, $.NSFontWeightRegular));
+  creditsValue = label('0.00', [130, H - 201, W - 146, 18], 13, T.gold, $.NSFontWeightSemibold);
   root.addSubview(creditsValue);
 
-  requestValue = label('', [14, 6, W - 48, 12], 8.5, T.faint, $.NSFontWeightRegular, 0, true);
+  requestValue = label('', [14, 4, W - 52, 14], 9.2, T.faint, $.NSFontWeightRegular, 0, true);
   root.addSubview(requestValue);
 
   gripBox = box([W / 2 - 14, H - 5, 28, 3], T.track, 1.5, 0, null);
   root.addSubview(gripBox);
 
-  addGearButton(root, W - 28, 3, 12, T.gray);
+  addGearButton(root, W - 30, 3, 13, T.gray);
 }
 
 function buildBar(root, mode) {
   const W = mode === 'title' ? state.widths.title : (mode === 'top' ? state.widths.top : state.widths.bottom);
   const H = mode === 'title' ? BAR_H_TITLE : (mode === 'top' ? BAR_H_TOP : BAR_H_BOTTOM);
-  const y = H === BAR_H_TITLE ? 5 : 7;
-  const stateW = 70;
-  const latencyW = 68;
+  const y = H === BAR_H_TITLE ? 6 : 8;
+  const stateW = 84;
+  const latencyW = 72;
   const isTitleMode = mode === 'title';
 
-  const stateX = W - stateW - 34;
-  const latencyX = stateX - latencyW - 8;
+  const stateX = W - stateW - 38;
+  const latencyX = stateX - latencyW - 10;
 
   accentBar = box([12, H - 4, W - 24, 2], T.track, 1, 0, null);
   root.addSubview(accentBar);
 
-  dotHalo = box([9, Math.round((H - 13) / 2), 13, 13], T.grayTint, 6.5, 0, null);
+  dotHalo = box([9, Math.round((H - 14) / 2), 14, 14], T.grayTint, 7, 0, null);
   root.addSubview(dotHalo);
-  dotBox = box([12, Math.round((H - 7) / 2), 7, 7], T.gray, 3.5, 0, null);
+  dotBox = box([12.5, Math.round((H - 8) / 2), 8, 8], T.gray, 4, 0, null);
   root.addSubview(dotBox);
 
   let tpsX = 22;
   if (!isTitleMode) {
-    const titleW = Math.max(88, Math.min(210, Math.round(W * 0.22)));
-    titleLabel = label('', [26, y, titleW, 15], 10.5, T.text, $.NSFontWeightMedium, 0, true);
+    const titleW = Math.max(88, Math.min(190, Math.round(W * 0.19)));
+    titleLabel = label('', [26, y, titleW, 16], 11.5, T.text, $.NSFontWeightMedium, 0, true);
     root.addSubview(titleLabel);
-    const dividerX = 26 + titleW + 5;
-    root.addSubview(box([dividerX, H === BAR_H_TITLE ? 6 : 8, 1, H === BAR_H_TITLE ? 12 : 14],
+    const dividerX = 26 + titleW + 6;
+    root.addSubview(box([dividerX, H === BAR_H_TITLE ? 7 : 9, 1, H === BAR_H_TITLE ? 14 : 16],
       T.divider, 0, 0, null));
     tpsX = dividerX + 8;
   }
 
-  root.addSubview(label('TPS', [tpsX, y + 1, 22, 10], 8, T.faint, $.NSFontWeightRegular));
-  tpsValue = label('—', [tpsX + 19, y - 3, 48, 18], 13.5, T.green, $.NSFontWeightSemibold);
+  root.addSubview(label('TPS', [tpsX, y + 2, 24, 11], 8.8, T.faint, $.NSFontWeightRegular));
+  tpsValue = label('—', [tpsX + 20, y - 4, 52, 20], 15, T.green, $.NSFontWeightSemibold);
   root.addSubview(tpsValue);
-  const metricsX = tpsX + 70;
+  const metricsX = tpsX + 66;
 
   const metricsW = Math.max(60, latencyX - metricsX - 10);
   state.barMetricsCapacity = metricsW;
-  metricsLabel = label('', [metricsX, y, metricsW, 15],
-    H === BAR_H_TITLE ? 9 : 9.5, T.soft, $.NSFontWeightRegular, 0, true);
+  metricsLabel = label('', [metricsX, y, metricsW, 16],
+    H === BAR_H_TITLE ? 9.8 : 10, T.soft, $.NSFontWeightRegular, 0, true);
   root.addSubview(metricsLabel);
 
-  latencyPill = box([latencyX - 5, H === BAR_H_TITLE ? 4 : 6, latencyW + 6, 18],
-    T.grayTint, 9, 0, null);
+  latencyPill = box([latencyX - 6, H === BAR_H_TITLE ? 5 : 7, latencyW + 8, 20],
+    T.grayTint, 10, 0, null);
   root.addSubview(latencyPill);
-  latencyValue = label('延迟 —', [latencyX, y, latencyW, 15], 9, T.gray, $.NSFontWeightRegular, 2);
+  latencyValue = label('延迟 —', [latencyX, y + 1, latencyW, 16], 9.4, T.gray, $.NSFontWeightRegular, 2);
   root.addSubview(latencyValue);
 
-  statusPill = box([stateX - 3, H === BAR_H_TITLE ? 4 : 6, stateW + 6, 18],
-    T.grayTint, 9, 0, null);
+  statusPill = box([stateX - 4, H === BAR_H_TITLE ? 5 : 7, stateW + 8, 20],
+    T.grayTint, 10, 0, null);
   root.addSubview(statusPill);
-  stateLabel = label('', [stateX, H === BAR_H_TITLE ? 5 : 8, stateW, 15],
-    9, T.faint, $.NSFontWeightMedium, 2);
+  stateLabel = label('', [stateX, H === BAR_H_TITLE ? 6 : 9, stateW, 16],
+    9.3, T.faint, $.NSFontWeightMedium, 2);
   root.addSubview(stateLabel);
 
-  addGearButton(root, W - 26, Math.round((H - 18) / 2) + 0, 12, T.gray);
+  addGearButton(root, W - 28, Math.round((H - 20) / 2), 13, T.gray);
 }
 
 function buildIndicator(w) {
@@ -1166,7 +1291,7 @@ function buildUI(mode) {
 
   bgBox = isTitle
     ? box([0, 0, w, h], $.NSColor.clearColor, 0, 0, null)
-    : box([0, 0, w, h], T.bg, isCard ? 12 : 10, 1, T.border);
+    : box([0, 0, w, h], T.bg, isCard ? 14 : 12, 1, T.border);
   root.addSubview(bgBox);
 
   if (isCard) buildSidebar(root);
@@ -1305,9 +1430,9 @@ function updateSparkline() {
   for (let i = 0; i < n; i++) {
     const idx = hist.length - n + i;
     const v = idx >= 0 ? hist[idx] : 0;
-    const h = v > 0 ? Math.max(3, Math.min(24, 4 + (v / max) * 20)) : 1;
+    const h = v > 0 ? Math.max(3, Math.min(26, 4 + (v / max) * 22)) : 1;
     const b = sparkBars[i];
-    setBoxFrame(b, 124 + i * 6.8, CARD_H - 114, 4, h);
+    setBoxFrame(b, 128 + i * 7, CARD_H - 119, 4.2, h);
     b.setFillColor(v > 0 ? (i === n - 1 ? T.green : T.greenDim) : T.track);
   }
 }
@@ -1694,8 +1819,12 @@ function buildMenu() {
 
   const themeMenu = $.NSMenu.alloc.initWithTitle('外观');
   themeMenu.setAutoenablesItems(false);
-  themeMenu.addItem(menuItem('浅色卡片', 'themeLight:', state.theme === 'light', null));
-  themeMenu.addItem(menuItem('深色卡片', 'themeDark:', state.theme === 'dark', null));
+  themeMenu.addItem(menuItem('自动（跟随 Qoder）', 'themeAuto:', state.theme === 'auto', null));
+  themeMenu.addItem(menuItem('纸白', 'themePaper:', state.theme === 'paper', null));
+  themeMenu.addItem(menuItem('石墨', 'themeGraphite:', state.theme === 'graphite', null));
+  themeMenu.addItem(menuItem('海盐', 'themeOcean:', state.theme === 'ocean', null));
+  themeMenu.addItem(menuItem('暮色', 'themeDusk:', state.theme === 'dusk', null));
+  themeMenu.addItem(menuItem('暖砂', 'themeSand:', state.theme === 'sand', null));
   const themeItem = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('外观', '', '');
   themeItem.setSubmenu(themeMenu);
   menu.addItem(themeItem);
@@ -1942,8 +2071,9 @@ function buildSettingsWindow() {
   root.addSubview(settingsWidthPopup);
 
   root.addSubview(sLabel('外观', [20, 244, 90, 18], 11));
-  settingsThemePopup = sPopup(['浅色卡片', '深色卡片'], state.theme === 'dark' ? 1 : 0,
+  settingsThemePopup = sPopup(SKIN_NAMES, Math.max(0, SKIN_IDS.indexOf(state.theme)),
     [118, 240, 282, 26], 'settingsThemeChanged:');
+  try { settingsThemePopup.setToolTip('自动会跟随 Qoder 的深浅色；Qoder 未设置时跟随系统'); } catch (e) {}
   root.addSubview(settingsThemePopup);
 
   settingsBottomAutoHide = sCheckbox('下方空间不足时自动隐藏', [20, 210, 360, 24],
@@ -1977,8 +2107,9 @@ function updateSettingsControls() {
     const width = state.layout === 'title' ? state.widths.title :
       (state.layout === 'top' ? state.widths.top : state.widths.bottom);
     settingsWidthPopup.selectItemAtIndex(width <= 680 ? 0 : (width >= 880 ? 2 : 1));
-    settingsThemePopup.selectItemAtIndex(state.theme === 'dark' ? 1 : 0);
-    const name = state.theme === 'dark' ? $.NSAppearanceNameDarkAqua : $.NSAppearanceNameAqua;
+    settingsThemePopup.selectItemAtIndex(Math.max(0, SKIN_IDS.indexOf(state.theme)));
+    const dark = state.resolvedSkin === 'graphite' || state.resolvedSkin === 'dusk';
+    const name = dark ? $.NSAppearanceNameDarkAqua : $.NSAppearanceNameAqua;
     const appearance = $.NSAppearance.appearanceNamed(name);
     if (appearance && !appearance.isNil()) settingsPanel.setAppearance(appearance);
   } catch (e) {
@@ -1998,15 +2129,7 @@ function showSettings() {
   }
 }
 
-function setTheme(theme) {
-  const next = theme === 'dark' ? 'dark' : 'light';
-  if (next === state.theme) {
-    buildMenu();
-    return;
-  }
-  state.theme = next;
-  T = next === 'dark' ? PALETTE_DARK : PALETTE_LIGHT;
-  saveSettings();
+function rebuildPanelUI() {
   if (panel) panel.orderOut(null);
   buildUI(state.layout);
   applyWindowLayout();
@@ -2014,6 +2137,36 @@ function setTheme(theme) {
   updateUI();
   updateSettingsControls();
   buildMenu();
+}
+
+function setTheme(theme) {
+  const next = normalizeTheme(theme);
+  if (next === state.theme) {
+    buildMenu();
+    return;
+  }
+  const prevSkin = state.resolvedSkin;
+  state.theme = next;
+  applySkin();
+  saveSettings();
+  if (state.resolvedSkin !== prevSkin) {
+    rebuildPanelUI();
+  } else {
+    updateSettingsControls();
+    buildMenu();
+  }
+}
+
+function syncAutoTheme() {
+  if (state.theme !== 'auto') return;
+  const now = Date.now();
+  if (now - state.autoThemeAt < 2000) return;
+  state.autoThemeAt = now;
+  const skin = resolveSkin('auto');
+  if (skin === state.resolvedSkin) return;
+  state.resolvedSkin = skin;
+  T = SKINS[skin] || SKINS.paper;
+  rebuildPanelUI();
 }
 
 function setLayout(mode) {
@@ -2116,13 +2269,29 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function (sender) { setLayout('bottom'); }
     },
-    'themeLight:': {
+    'themeAuto:': {
       types: ['void', ['id']],
-      implementation: function (sender) { setTheme('light'); }
+      implementation: function (sender) { setTheme('auto'); }
     },
-    'themeDark:': {
+    'themePaper:': {
       types: ['void', ['id']],
-      implementation: function (sender) { setTheme('dark'); }
+      implementation: function (sender) { setTheme('paper'); }
+    },
+    'themeGraphite:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setTheme('graphite'); }
+    },
+    'themeOcean:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setTheme('ocean'); }
+    },
+    'themeDusk:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setTheme('dusk'); }
+    },
+    'themeSand:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setTheme('sand'); }
     },
     'toggleAutoStart:': {
       types: ['void', ['id']],
@@ -2212,7 +2381,7 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function (sender) {
         const idx = Number(settingsThemePopup.indexOfSelectedItem);
-        setTheme(idx === 1 ? 'dark' : 'light');
+        setTheme(SKIN_IDS[idx] || 'auto');
         updateSettingsControls();
       }
     },
@@ -2527,6 +2696,7 @@ function tick() {
     }
     const liveBounds = readQoderWindowBounds();
     if (liveBounds) state.windowBounds = liveBounds;
+    syncAutoTheme();
     updateUI();
     updateBottomHover();
     updateTopHover();
@@ -2553,7 +2723,7 @@ function main() {
     }
   } catch (e) {}
 
-  T = state.theme === 'dark' ? PALETTE_DARK : PALETTE_LIGHT;
+  applySkin();
   buildUI(state.layout);
   buildStatusItem();
 
