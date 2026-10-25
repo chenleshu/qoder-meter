@@ -1382,11 +1382,9 @@ function refreshVisibility() {
       bid = front.bundleIdentifier.js;
     }
   } catch (e) {}
-  if (bid === 'com.qoder.app' || bid.indexOf('qoder.meter') >= 0) {
-    state.lastQoderFrontAt = Date.now();
-  }
-  const show = !state.panelHidden && state.qoderRunning &&
-    (Date.now() - state.lastQoderFrontAt < 2500);
+  const frontIsQoder = bid === 'com.qoder.app';
+  if (frontIsQoder) state.lastQoderFrontAt = Date.now();
+  const show = !state.panelHidden && state.qoderRunning && frontIsQoder;
   const bottomCollapsed = state.layout === 'bottom' && !state.bottomOutside &&
     state.bottomAutoHide && !state.bottomRevealed;
 
