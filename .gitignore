@@ -1,0 +1,4 @@
+QoderMeter.app/
+.build/
+.DS_Store
+*.log

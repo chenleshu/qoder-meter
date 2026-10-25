@@ -1,0 +1,30 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build QoderMeter.app
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Verify bundle
+        run: |
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' QoderMeter.app/Contents/Info.plist
+          test -x QoderMeter.app/Contents/MacOS/applet
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QoderMeter
+          path: QoderMeter.app
+          if-no-files-found: error
