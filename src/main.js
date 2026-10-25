@@ -102,6 +102,8 @@ const state = {
   bottomRevealed: false,
   bottomOutside: false,
   bottomHoverAt: 0,
+  updateUrl: null,
+  updateChecking: false,
   barMetricsCapacity: 0,
   recent: [],
   pinned: null,
@@ -189,6 +191,8 @@ let settingsPosPopup = null;
 let settingsWidthPopup = null;
 let settingsThemePopup = null;
 let settingsBottomAutoHide = null;
+let settingsUpdateButton = null;
+let settingsUpdateLabel = null;
 
 /* ---------------------------------------------------------------- utils */
 
@@ -1737,6 +1741,61 @@ function sSeparator(y) {
   return box([20, y, 380, 1], $.NSColor.separatorColor, 0, 0, null);
 }
 
+/* ------------------------------------------------------------ app updates */
+
+function appVersion() {
+  try {
+    const v = $.NSBundle.mainBundle.objectForInfoDictionaryKey('CFBundleShortVersionString');
+    if (v && !v.isNil()) {
+      const s = String(v.js).trim();
+      if (s) return s;
+    }
+  } catch (e) {}
+  return '0.0.0';
+}
+
+function versionParts(v) {
+  return String(v).replace(/^v/i, '').split(/[^0-9]+/)
+    .filter(function (part) { return part.length > 0; })
+    .map(function (part) { return parseInt(part, 10) || 0; });
+}
+
+function isNewerVersion(latest, current) {
+  const a = versionParts(latest);
+  const b = versionParts(current);
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return false;
+}
+
+function setUpdateStatus(text, color) {
+  if (!settingsUpdateLabel) return;
+  settingsUpdateLabel.setStringValue(text);
+  settingsUpdateLabel.setTextColor(color || $.NSColor.secondaryLabelColor);
+}
+
+function fetchLatestRelease() {
+  const cmd = '/usr/bin/curl -fsSL --connect-timeout 2 --max-time 5 ' +
+    '-H ' + q('Accept: application/vnd.github+json') + ' ' +
+    '-H ' + q('User-Agent: QoderMeter/' + appVersion()) + ' ' +
+    q('https://api.github.com/repos/chenleshu/qoder-meter/releases/latest');
+  const out = sh(cmd);
+  if (!out) return null;
+  const tag = (out.match(/"tag_name"\s*:\s*"([^"]+)"/) || [])[1];
+  const url = (out.match(/"html_url"\s*:\s*"([^"]+)"/) || [])[1];
+  if (!tag) return null;
+  return {
+    tag: String(tag).replace(/^v/i, ''),
+    url: url ? String(url).replace(/\\\//g, '/') :
+      'https://github.com/chenleshu/qoder-meter/releases/latest'
+  };
+}
+
 function buildSettingsWindow() {
   settingsPanel = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
     $.NSMakeRect(0, 0, 420, 520),
@@ -1761,6 +1820,17 @@ function buildSettingsWindow() {
   root.addSubview(sLabel('Qoder Meter', [58, 482, 300, 24], 17, $.NSFontWeightSemibold));
   root.addSubview(sLabel('状态条显示、启动与会话跟随', [60, 462, 300, 16], 11, $.NSFontWeightRegular,
     $.NSColor.secondaryLabelColor));
+
+  settingsUpdateButton = sButton('检查更新', [274, 478, 126, 28], 'checkUpdates:');
+  try {
+    settingsUpdateButton.setFont($.NSFont.systemFontOfSize(11));
+    settingsUpdateButton.setToolTip('点击后访问 GitHub Releases 检查新版本');
+  } catch (e) {}
+  root.addSubview(settingsUpdateButton);
+  settingsUpdateLabel = sLabel('v' + appVersion(), [270, 456, 130, 15], 9.5,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
+  try { settingsUpdateLabel.setAlignment(2); } catch (e) {}
+  root.addSubview(settingsUpdateLabel);
 
   root.addSubview(sLabel('启动与退出', [20, 432, 340, 18], 11, $.NSFontWeightSemibold));
   settingsAutoStart = sCheckbox('随 Qoder 自动启动', [20, 404, 360, 24],
@@ -2057,6 +2127,52 @@ ObjC.registerSubclass({
         const idx = Number(settingsThemePopup.indexOfSelectedItem);
         setTheme(idx === 1 ? 'dark' : 'light');
         updateSettingsControls();
+      }
+    },
+    'checkUpdates:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        if (state.updateChecking) return;
+        state.updateChecking = true;
+        try {
+          sender.setEnabled(false);
+          sender.setTitle('检查中…');
+          setUpdateStatus('正在连接 GitHub…');
+          sender.displayIfNeeded();
+          if (settingsUpdateLabel) settingsUpdateLabel.displayIfNeeded();
+        } catch (e) {}
+
+        const info = fetchLatestRelease();
+        state.updateChecking = false;
+        if (!settingsUpdateButton) return;
+        settingsUpdateButton.setEnabled(true);
+
+        const current = appVersion();
+        if (!info) {
+          settingsUpdateButton.setTitle('检查更新');
+          settingsUpdateButton.setAction('checkUpdates:');
+          setUpdateStatus('检查失败，请稍后再试', T.red);
+          return;
+        }
+        if (isNewerVersion(info.tag, current)) {
+          state.updateUrl = info.url;
+          settingsUpdateButton.setTitle('获取更新');
+          settingsUpdateButton.setAction('openUpdate:');
+          setUpdateStatus('发现 v' + info.tag, T.green);
+        } else {
+          state.updateUrl = null;
+          settingsUpdateButton.setTitle('检查更新');
+          settingsUpdateButton.setAction('checkUpdates:');
+          setUpdateStatus('已是最新 v' + current);
+        }
+      }
+    },
+    'openUpdate:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        if (!state.updateUrl) return;
+        sh('/usr/bin/open ' + q(state.updateUrl));
+        setUpdateStatus('已打开下载页');
       }
     },
     'closeSettings:': {
