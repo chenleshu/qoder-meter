@@ -31,12 +31,32 @@ const WATCH_LOG = SETTINGS_DIR + '/watch.log';
 const PAUSE_FLAG = SETTINGS_DIR + '/autostart-paused';
 const KEEP_FLAG = SETTINGS_DIR + '/keep-running';
 
-const BAR_H_TITLE = 28;
-const BAR_H_TOP = 32;
-const BAR_H_BOTTOM = 32;
+let BAR_H_TITLE = 28;
+let BAR_H_TOP = 32;
+let BAR_H_BOTTOM = 32;
 const CARD_W = 246;
 const CARD_H = 220;
 const POLL_SECONDS = 0.6;
+
+const FONT_SIZES = [
+  { id: 'small', label: '小', scale: 0.9 },
+  { id: 'normal', label: '标准', scale: 1 },
+  { id: 'large', label: '大', scale: 1.12 },
+  { id: 'xlarge', label: '特大', scale: 1.24 }
+];
+
+const DISPLAY_FIELDS = [
+  { id: 'tps', label: 'TPS' },
+  { id: 'turn', label: '本轮' },
+  { id: 'age', label: '总计' },
+  { id: 'token', label: 'Token' },
+  { id: 'credits', label: '积分' },
+  { id: 'requests', label: '请求' },
+  { id: 'tools', label: '工具' },
+  { id: 'latency', label: '延迟' },
+  { id: 'status', label: '状态' },
+  { id: 'title', label: '标题' }
+];
 
 const CJK_RE = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/g;
 
@@ -167,6 +187,11 @@ const state = {
   autoThemeAt: 0,
   positions: {},
   widths: { title: 800, top: 800, bottom: 800 },
+  display: {
+    tps: true, turn: true, age: true, token: true, credits: true,
+    requests: true, tools: true, latency: true, status: true, title: true
+  },
+  fontSize: 'normal',
   bottomAutoHide: true,
   bottomRevealed: false,
   bottomOutside: false,
@@ -177,7 +202,7 @@ const state = {
   topHoverAt: 0,
   updateUrl: null,
   updateChecking: false,
-  barMetricsCapacity: 0,
+  barLayout: null,
   recent: [],
   pinned: null,
   activeSessionId: null,
@@ -261,7 +286,8 @@ let settingsAutoStart = null;
 let settingsClose = null;
 let settingsFollow = null;
 let settingsPosPopup = null;
-let settingsWidthPopup = null;
+let settingsFontPopup = null;
+let settingsFieldChecks = [];
 let settingsThemePopup = null;
 let settingsBottomAutoHide = null;
 let settingsUpdateButton = null;
@@ -451,6 +477,30 @@ function applySkin() {
   T = SKINS[state.resolvedSkin] || SKINS.paper;
 }
 
+function fontScale() {
+  for (let i = 0; i < FONT_SIZES.length; i++) {
+    if (FONT_SIZES[i].id === state.fontSize) return FONT_SIZES[i].scale;
+  }
+  return 1;
+}
+
+function applyFontScale() {
+  const s = fontScale();
+  BAR_H_TITLE = Math.round(28 * s);
+  BAR_H_TOP = Math.round(32 * s);
+  BAR_H_BOTTOM = Math.round(32 * s);
+}
+
+function textWidth(text, font) {
+  try {
+    const attrs = $.NSDictionary.dictionaryWithObjectForKey(font, $.NSFontAttributeName);
+    const size = $(String(text)).sizeWithAttributes(attrs);
+    return Math.ceil(Number(size.width));
+  } catch (e) {
+    return Math.ceil(String(text).length * 7);
+  }
+}
+
 /* ------------------------------------------------------------ persistence */
 
 function loadSettings() {
@@ -484,6 +534,17 @@ function loadSettings() {
       if (typeof obj.bottomAutoHide === 'boolean') {
         state.bottomAutoHide = obj.bottomAutoHide;
       }
+      if (obj.display && typeof obj.display === 'object') {
+        for (let i = 0; i < DISPLAY_FIELDS.length; i++) {
+          const id = DISPLAY_FIELDS[i].id;
+          if (typeof obj.display[id] === 'boolean') state.display[id] = obj.display[id];
+        }
+      }
+      if (obj.fontSize) {
+        for (let i = 0; i < FONT_SIZES.length; i++) {
+          if (FONT_SIZES[i].id === obj.fontSize) state.fontSize = obj.fontSize;
+        }
+      }
     }
     const fm = $.NSFileManager.defaultManager;
     state.autoStart = !!fm.fileExistsAtPath(WATCH_PLIST);
@@ -503,6 +564,8 @@ function saveSettings() {
       theme: state.theme,
       positions: state.positions,
       widths: state.widths,
+      display: state.display,
+      fontSize: state.fontSize,
       bottomAutoHide: state.bottomAutoHide
     };
     const s = $.NSString.alloc.initWithString(JSON.stringify(obj, null, 2));
@@ -1200,62 +1263,171 @@ function buildSidebar(root) {
   addGearButton(root, W - 30, 3, 13, T.gray);
 }
 
-function buildBar(root, mode) {
-  const W = mode === 'title' ? titleBarWidth() :
-    (mode === 'top' ? state.widths.top : state.widths.bottom);
+function metricSampleWidth(mode, regFont, medFont) {
+  let w = 0;
+  let first = true;
+  const add = function (text, font) { w += textWidth(text, font); };
+  const sep = function () {
+    if (!first) add('  ·  ', regFont);
+    first = false;
+  };
+  if (state.display.turn) { sep(); add('本轮 ', regFont); add('88m 88s', medFont); }
+  if (state.display.age) { sep(); add('总计 ', regFont); add('888h 88m', medFont); }
+  if (state.display.token) { sep(); add('Token ', regFont); add('≈ 888.8k', medFont); }
+  if (state.display.credits) { sep(); add('积分 ', regFont); add('888.88', medFont); }
+  if (state.display.requests) { sep(); add('8888 请求', regFont); }
+  if (state.display.tools) { sep(); add('工具 8.8k', regFont); }
+  return w;
+}
+
+function computeBarLayout(mode) {
+  const S = fontScale();
   const H = mode === 'title' ? BAR_H_TITLE : (mode === 'top' ? BAR_H_TOP : BAR_H_BOTTOM);
-  const y = H === BAR_H_TITLE ? 6 : 8;
-  const stateW = 84;
-  const latencyW = 72;
-  const isTitleMode = mode === 'title';
+  const titleFont = $.NSFont.systemFontOfSizeWeight(11.5 * S, $.NSFontWeightMedium);
+  const tpsLabelFont = $.NSFont.systemFontOfSizeWeight(8.8 * S, $.NSFontWeightRegular);
+  const tpsValueFont = $.NSFont.monospacedDigitSystemFontOfSizeWeight(15 * S, $.NSFontWeightSemibold);
+  const metricsSize = (mode === 'title' ? 9.5 : 10) * S;
+  const metricsReg = $.NSFont.monospacedDigitSystemFontOfSizeWeight(metricsSize, $.NSFontWeightRegular);
+  const metricsMed = $.NSFont.monospacedDigitSystemFontOfSizeWeight(metricsSize, $.NSFontWeightMedium);
+  const pillSize = 9.3 * S;
+  const pillFont = $.NSFont.systemFontOfSizeWeight(pillSize, $.NSFontWeightRegular);
+  const padL = Math.round(10 * S);
+  const dotHalo = Math.round(14 * S);
+  const dotGap = Math.round(7 * S);
+  const fieldGap = Math.round(10 * S);
+  const pillGap = Math.round(8 * S);
+  const rightPad = Math.round(9 * S);
+  const gearSize = Math.max(11, Math.round(13 * S));
+  const gearPill = gearSize + 6;
+  const pillH = Math.round(20 * S);
+  const pillPad = Math.round(8 * S);
+  const baseY = Math.round((H - 16 * S) / 2);
 
-  const stateX = W - stateW - 38;
-  const latencyX = stateX - latencyW - 10;
+  const tpsLabelW = textWidth('TPS', tpsLabelFont) + Math.round(4 * S);
+  const tpsValueW = Math.max(Math.round(46 * S), textWidth('888.8', tpsValueFont));
+  const tpsGap = Math.round(3 * S);
+  const tpsBlock = tpsLabelW + tpsGap + tpsValueW;
 
-  accentBar = box([12, H - 4, W - 24, 2], T.track, 1, 0, null);
+  const showTitle = mode !== 'title' && !!state.display.title;
+  const titleW = showTitle ? Math.round(160 * S) : 0;
+  const titleBlock = showTitle ? titleW + Math.round(6 * S) + 1 + Math.round(8 * S) : 0;
+
+  const showMetrics = ['turn', 'age', 'token', 'credits', 'requests', 'tools']
+    .some(function (id) { return !!state.display[id]; });
+  const metricsNeed = showMetrics ? metricSampleWidth(mode, metricsReg, metricsMed) : 0;
+
+  const showLatency = !!state.display.latency;
+  const showStatus = !!state.display.status;
+  const latencyTextW = showLatency ? textWidth('延迟 88.8s', pillFont) : 0;
+  const statusTextW = showStatus ? textWidth('生成中 88.8s', pillFont) : 0;
+  const latencyPillW = showLatency ? latencyTextW + pillPad * 2 : 0;
+  const statusPillW = showStatus ? statusTextW + pillPad * 2 : 0;
+
+  const left = padL + dotHalo + dotGap + titleBlock + (state.display.tps ? tpsBlock : 0);
+  const right = gearPill + rightPad + (showStatus ? statusPillW + pillGap : 0) +
+    (showLatency ? latencyPillW + pillGap : 0);
+  let W = left + fieldGap + right + (showMetrics ? metricsNeed : 0);
+
+  const b = state.windowBounds;
+  let maxW;
+  if (mode === 'title' || (mode === 'top' && state.topInline)) {
+    maxW = b && b.width ? Math.max(Math.round(320 * S), Math.round(b.width - 360)) :
+      Math.round(900 * S);
+  } else {
+    const sw = Number($.NSScreen.mainScreen.frame.size.width);
+    maxW = Math.max(Math.round(320 * S), sw - 16);
+  }
+  W = Math.max(Math.round(220 * S), Math.round(Math.min(W, maxW)));
+
+  let cursor = padL + dotHalo + dotGap;
+  const titleX = cursor;
+  if (showTitle) cursor += titleBlock;
+  const dividerX = showTitle ? titleX + titleW + Math.round(6 * S) : 0;
+  const tpsX = cursor;
+  const tpsLabelX = tpsX;
+  const tpsValueX = tpsX + tpsLabelW + tpsGap;
+  if (state.display.tps) cursor += tpsBlock;
+  const metricsX = cursor;
+
+  const gearX = W - rightPad - gearPill;
+  const statusPillX = showStatus ? (gearX - pillGap - statusPillW) : gearX;
+  const latencyPillX = showLatency ?
+    ((showStatus ? statusPillX : gearX) - pillGap - latencyPillW) : 0;
+  const rightStart = showLatency ? latencyPillX : (showStatus ? statusPillX : gearX);
+  const metricsW = Math.max(0, rightStart - fieldGap - metricsX);
+
+  return {
+    S, W, H, baseY,
+    titleFont, tpsLabelFont, tpsValueFont, metricsSize, metricsReg, metricsMed,
+    pillFont, pillSize, pillH, pillPad,
+    padL, dotX: padL, dotHalo, dotGap,
+    showTitle, titleX, titleW, dividerX,
+    showTps: !!state.display.tps, tpsLabelX, tpsValueX, tpsLabelW, tpsValueW,
+    showMetrics, metricsX, metricsW,
+    showLatency, latencyPillX, latencyPillW, latencyTextW,
+    showStatus, statusPillX, statusPillW, statusTextW,
+    gearX, gearSize, gearPill
+  };
+}
+
+function buildBar(root, mode, L) {
+  const S = L.S;
+  const W = L.W;
+  const H = L.H;
+  const dotInset = Math.round((L.dotHalo - 8 * S) / 2);
+
+  accentBar = box([L.padL, H - 4, Math.max(1, W - L.padL * 2), 2], T.track, 1, 0, null);
   root.addSubview(accentBar);
 
-  dotHalo = box([9, Math.round((H - 14) / 2), 14, 14], T.grayTint, 7, 0, null);
+  dotHalo = box([L.dotX, Math.round((H - L.dotHalo) / 2), L.dotHalo, L.dotHalo],
+    T.grayTint, L.dotHalo / 2, 0, null);
   root.addSubview(dotHalo);
-  dotBox = box([12.5, Math.round((H - 8) / 2), 8, 8], T.gray, 4, 0, null);
+  dotBox = box([L.dotX + dotInset, Math.round((H - 8 * S) / 2), Math.round(8 * S),
+    Math.round(8 * S)], T.gray, (8 * S) / 2, 0, null);
   root.addSubview(dotBox);
 
-  let tpsX = 22;
-  if (!isTitleMode) {
-    const titleW = Math.max(88, Math.min(190, Math.round(W * 0.19)));
-    titleLabel = label('', [26, y, titleW, 16], 11.5, T.text, $.NSFontWeightMedium, 0, true);
+  if (L.showTitle) {
+    titleLabel = label('', [L.titleX, L.baseY, L.titleW, Math.round(16 * S)],
+      11.5 * S, T.text, $.NSFontWeightMedium, 0, true);
     root.addSubview(titleLabel);
-    const dividerX = 26 + titleW + 6;
-    root.addSubview(box([dividerX, H === BAR_H_TITLE ? 7 : 9, 1, H === BAR_H_TITLE ? 14 : 16],
+    root.addSubview(box([L.dividerX, Math.round(9 * S), 1, Math.round(16 * S)],
       T.divider, 0, 0, null));
-    tpsX = dividerX + 8;
   }
 
-  root.addSubview(label('TPS', [tpsX, y + 2, 24, 11], 8.8, T.faint, $.NSFontWeightRegular));
-  tpsValue = label('—', [tpsX + 20, y - 4, 52, 20], 15, T.green, $.NSFontWeightSemibold);
-  root.addSubview(tpsValue);
-  const metricsX = tpsX + 66;
+  if (L.showTps) {
+    root.addSubview(label('TPS', [L.tpsLabelX, L.baseY + Math.round(2 * S),
+      L.tpsLabelW, Math.round(11 * S)], 8.8 * S, T.faint, $.NSFontWeightRegular));
+    tpsValue = label('—', [L.tpsValueX, L.baseY - Math.round(4 * S), L.tpsValueW,
+      Math.round(20 * S)], 15 * S, T.green, $.NSFontWeightSemibold);
+    root.addSubview(tpsValue);
+  }
 
-  const metricsW = Math.max(60, latencyX - metricsX - 10);
-  state.barMetricsCapacity = metricsW;
-  metricsLabel = label('', [metricsX, y, metricsW, 16],
-    H === BAR_H_TITLE ? 9.5 : 10, T.soft, $.NSFontWeightRegular, 0, true);
-  root.addSubview(metricsLabel);
+  if (L.showMetrics) {
+    metricsLabel = label('', [L.metricsX, L.baseY, Math.max(10, L.metricsW),
+      Math.round(16 * S)], L.metricsSize, T.soft, $.NSFontWeightRegular, 0, true);
+    root.addSubview(metricsLabel);
+  }
 
-  latencyPill = box([latencyX - 6, H === BAR_H_TITLE ? 5 : 7, latencyW + 8, 20],
-    T.grayTint, 10, 0, null);
-  root.addSubview(latencyPill);
-  latencyValue = label('延迟 —', [latencyX, y + 1, latencyW, 16], 9.4, T.gray, $.NSFontWeightRegular, 2);
-  root.addSubview(latencyValue);
+  const pillY = Math.round((H - L.pillH) / 2);
+  if (L.showLatency) {
+    latencyPill = box([L.latencyPillX, pillY, L.latencyPillW, L.pillH],
+      T.grayTint, L.pillH / 2, 0, null);
+    root.addSubview(latencyPill);
+    latencyValue = label('延迟 —', [L.latencyPillX + L.pillPad, L.baseY + Math.round(S),
+      L.latencyTextW, Math.round(15 * S)], L.pillSize, T.gray, $.NSFontWeightRegular, 2);
+    root.addSubview(latencyValue);
+  }
 
-  statusPill = box([stateX - 4, H === BAR_H_TITLE ? 5 : 7, stateW + 8, 20],
-    T.grayTint, 10, 0, null);
-  root.addSubview(statusPill);
-  stateLabel = label('', [stateX, H === BAR_H_TITLE ? 6 : 9, stateW, 16],
-    9.3, T.faint, $.NSFontWeightMedium, 2);
-  root.addSubview(stateLabel);
+  if (L.showStatus) {
+    statusPill = box([L.statusPillX, pillY, L.statusPillW, L.pillH],
+      T.grayTint, L.pillH / 2, 0, null);
+    root.addSubview(statusPill);
+    stateLabel = label('', [L.statusPillX + L.pillPad, L.baseY + Math.round(S),
+      L.statusTextW, Math.round(15 * S)], L.pillSize, T.faint, $.NSFontWeightMedium, 2);
+    root.addSubview(stateLabel);
+  }
 
-  addGearButton(root, W - 28, Math.round((H - 20) / 2), 13, T.gray);
+  addGearButton(root, L.gearX, Math.round((H - L.gearPill) / 2), L.gearSize, T.gray);
 }
 
 function buildIndicator(w) {
@@ -1278,11 +1450,6 @@ function buildIndicator(w) {
   indicatorPanel.orderOut(null);
 }
 
-function titleBarWidth() {
-  const b = state.windowBounds;
-  const avail = b && isFinite(b.width) ? b.width - 360 : 560;
-  return Math.max(520, Math.min(750, Math.round(avail)));
-}
 
 function buildUI(mode) {
   state.uiReady = false;
@@ -1295,10 +1462,19 @@ function buildUI(mode) {
   const isTitle = state.layout === 'title';
   const isTop = state.layout === 'top';
   const inline = isTitle || (isTop && state.topInline);
-  const w = isCard ? CARD_W : (inline ? titleBarWidth() :
-    (isTop ? state.widths.top : state.widths.bottom));
-  const h = isCard ? CARD_H : (inline ? BAR_H_TITLE :
-    (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
+  let w;
+  let h;
+  let barLayout = null;
+  if (isCard) {
+    w = CARD_W;
+    h = CARD_H;
+    state.barLayout = null;
+  } else {
+    barLayout = computeBarLayout(inline ? 'title' : state.layout);
+    state.barLayout = barLayout;
+    w = barLayout.W;
+    h = barLayout.H;
+  }
   const root = makePanel(w, h);
   panel.setHasShadow(true);
 
@@ -1306,7 +1482,7 @@ function buildUI(mode) {
   root.addSubview(bgBox);
 
   if (isCard) buildSidebar(root);
-  else buildBar(root, inline ? 'title' : state.layout);
+  else buildBar(root, inline ? 'title' : state.layout, barLayout);
 
   const dragHeight = isCard ? 64 : (inline ? h : 0);
   if (dragHeight > 0) {
@@ -1320,7 +1496,7 @@ function buildUI(mode) {
     indicatorPanel = null;
   }
   if (state.layout === 'bottom' || state.layout === 'top') {
-    buildIndicator(state.widths[state.layout]);
+    buildIndicator(w);
   }
 
   panel.orderOut(null);
@@ -1448,10 +1624,10 @@ function updateSparkline() {
   }
 }
 
-function setBarMetrics(size, turnText, ageText, outText, credits, requests, tools) {
-  if (!metricsLabel) return;
-  const fontReg = $.NSFont.monospacedDigitSystemFontOfSizeWeight(size, $.NSFontWeightRegular);
-  const fontMed = $.NSFont.monospacedDigitSystemFontOfSizeWeight(size, $.NSFontWeightMedium);
+function setBarMetrics(L, turnText, ageText, outText, credits, requests, tools) {
+  if (!metricsLabel || !L) return;
+  const fontReg = L.metricsReg;
+  const fontMed = L.metricsMed;
   const m = $.NSMutableAttributedString.alloc.init;
   function add(text, color, font) {
     if (!text) return;
@@ -1462,28 +1638,37 @@ function setBarMetrics(size, turnText, ageText, outText, credits, requests, tool
     seg.addAttributeValueRange($.NSFontAttributeName, font, range);
     m.appendAttributedString(seg);
   }
-  const cap = state.barMetricsCapacity || 999;
-  add('本轮 ', T.faint, fontReg);
-  add(turnText, T.text, fontMed);
-  add('  ·  ', T.track, fontReg);
-  add('总计 ', T.faint, fontReg);
-  add(ageText, T.text, fontMed);
-  if (cap >= 235) {
-    add('  ·  ', T.track, fontReg);
+  let first = true;
+  const sep = function () {
+    if (!first) add('  ·  ', T.track, fontReg);
+    first = false;
+  };
+  if (state.display.turn) {
+    sep();
+    add('本轮 ', T.faint, fontReg);
+    add(turnText, T.text, fontMed);
+  }
+  if (state.display.age) {
+    sep();
+    add('总计 ', T.faint, fontReg);
+    add(ageText, T.text, fontMed);
+  }
+  if (state.display.token) {
+    sep();
     add('Token ', T.faint, fontReg);
     add(outText, T.soft, fontMed);
   }
-  if (cap >= 310) {
-    add('  ·  ', T.track, fontReg);
+  if (state.display.credits) {
+    sep();
     add('积分 ', T.faint, fontReg);
     add(fmtCredits(credits), T.gold, fontMed);
   }
-  if (cap >= 400) {
-    add('  ·  ', T.track, fontReg);
+  if (state.display.requests) {
+    sep();
     add(fmtCount(requests) + ' 请求', T.soft, fontReg);
   }
-  if (cap >= 440) {
-    add('  ·  ', T.track, fontReg);
+  if (state.display.tools) {
+    sep();
     add('工具 ' + fmtCount(tools), T.soft, fontReg);
   }
   metricsLabel.setAttributedStringValue(m);
@@ -1512,7 +1697,9 @@ function updateUI() {
     : (state.estOut > 0 ? '≈ ' + fmtK(state.estOut) : '—');
   const latencyText = state.lastLatency ? fmtElapsed(state.lastLatency) : '—';
 
-  setText(titleLabel, hasSession ? truncate(state.title || '未命名会话', 60) : '等待 Qoder 会话');
+  if (titleLabel) {
+    setText(titleLabel, hasSession ? truncate(state.title || '未命名会话', 60) : '等待 Qoder 会话');
+  }
   if (modelLabel) {
     setText(modelLabel, '会话统计');
   }
@@ -1527,9 +1714,11 @@ function updateUI() {
       ' 请求 · ' + fmtCount(toolCount) + ' 工具');
     updateSparkline();
   } else {
-    setText(tpsValue, tpsText);
-    setBarMetrics(state.layout === 'title' ? 9 : 9.5, turnText, ageText, outText,
-      state.credits, requestCount, toolCount);
+    if (tpsValue) setText(tpsValue, tpsText);
+    if (metricsLabel) {
+      setBarMetrics(state.barLayout, turnText, ageText, outText,
+        state.credits, requestCount, toolCount);
+    }
     if (latencyValue) {
       setText(latencyValue, '延迟 ' + latencyText);
       setColor(latencyValue, state.lastLatency ? T.gray : T.faint);
@@ -1544,10 +1733,14 @@ function updateUI() {
   if (statusPill) statusPill.setFillColor(statusTint);
   if (accentBar) accentBar.setFillColor(state.inFlight ? T.green : (active ? T.gold : T.track));
   if (gripBox) gripBox.setFillColor(state.inFlight ? T.green : (active ? T.gold : T.track));
-  setText(stateLabel, state.inFlight ? ('生成中 ' + fmtElapsed(state.inFlightElapsed))
-    : (active ? '本轮中' : (hasSession ? '空闲' : '')));
-  setColor(stateLabel, state.inFlight ? T.green : (active ? T.gold : T.faint));
-  setColor(tpsValue, state.inFlight ? T.green : (state.tps ? T.greenDim : T.faint));
+  if (stateLabel) {
+    setText(stateLabel, state.inFlight ? ('生成中 ' + fmtElapsed(state.inFlightElapsed))
+      : (active ? '本轮中' : (hasSession ? '空闲' : '')));
+    setColor(stateLabel, state.inFlight ? T.green : (active ? T.gold : T.faint));
+  }
+  if (tpsValue) {
+    setColor(tpsValue, state.inFlight ? T.green : (state.tps ? T.greenDim : T.faint));
+  }
 
   const exactNote = state.exactOut > 0 ? 'Token 精确值'
     : 'Token 按字符估算（模型未返回精确值），积分来自 Qoder 本地账单';
@@ -1573,8 +1766,8 @@ function updateUI() {
   if (tooltip !== state.lastTooltip) {
     state.lastTooltip = tooltip;
     try {
-      titleLabel.setToolTip(tooltip);
-      bgBox.setToolTip(tooltip);
+      if (titleLabel) titleLabel.setToolTip(tooltip);
+      if (bgBox) bgBox.setToolTip(tooltip);
       if (dragView) dragView.setToolTip(tooltip);
     } catch (e) {}
   }
@@ -1620,10 +1813,9 @@ function applyWindowLayout() {
     }
   }
   const inline = isTitle || (isTop && state.topInline);
-  const w = isCard ? CARD_W : (inline ? titleBarWidth() :
-    (isTop ? state.widths.top : state.widths.bottom));
-  const h = isCard ? CARD_H : (inline ? BAR_H_TITLE :
-    (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
+  const pf = panel.frame;
+  const w = Number(pf.size.width);
+  const h = Number(pf.size.height);
   if (!isTop) state.topRevealed = false;
 
   const saved = state.positions[state.layout];
@@ -1695,7 +1887,7 @@ function updateTopHover() {
     const sh = Number(screen.frame.size.height);
     const topInset = Math.max(0, Math.round(sh - (Number(screen.visibleFrame.origin.y) +
       Number(screen.visibleFrame.size.height))));
-    const w = state.widths.top;
+    const w = panel ? Number(panel.frame.size.width) : state.widths.top;
     const h = BAR_H_TOP;
     let x = b.x + Math.round((b.width - w) / 2);
     if (x + w > sw - 8) x = Math.max(8, sw - w - 8);
@@ -1762,7 +1954,7 @@ function updateBottomHover() {
     const sw = Number(screen.frame.size.width);
     const sh = Number(screen.frame.size.height);
     const bottom = sh - (b.y + b.height);
-    const w = state.widths.bottom;
+    const w = panel ? Number(panel.frame.size.width) : state.widths.bottom;
     let x = b.x + 250;
     if (b.x >= 0 && b.x < sw) {
       if (x + w > sw - 8) x = Math.max(8, sw - w - 8);
@@ -1794,6 +1986,15 @@ function menuItem(title, action, checked, represented) {
   if (checked !== null) item.setState(checked ? 1 : 0);
   if (represented) item.setRepresentedObject(represented);
   return item;
+}
+
+function representedId(sender) {
+  try {
+    const ro = sender.representedObject;
+    return (ro && ro.js !== undefined) ? String(ro.js) : String(ro || '');
+  } catch (e) {
+    return '';
+  }
 }
 
 function buildMenu() {
@@ -1839,6 +2040,26 @@ function buildMenu() {
   posItem.setSubmenu(posMenu);
   menu.addItem(posItem);
 
+  const displayMenu = $.NSMenu.alloc.initWithTitle('显示内容');
+  displayMenu.setAutoenablesItems(false);
+  for (let i = 0; i < DISPLAY_FIELDS.length; i++) {
+    const field = DISPLAY_FIELDS[i];
+    displayMenu.addItem(menuItem(field.label, 'toggleDisplay:', !!state.display[field.id], field.id));
+  }
+  const displayItem = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('显示内容', '', '');
+  displayItem.setSubmenu(displayMenu);
+  menu.addItem(displayItem);
+
+  const fontMenu = $.NSMenu.alloc.initWithTitle('字号');
+  fontMenu.setAutoenablesItems(false);
+  for (let i = 0; i < FONT_SIZES.length; i++) {
+    fontMenu.addItem(menuItem(FONT_SIZES[i].label, 'fontSizeMenu:',
+      state.fontSize === FONT_SIZES[i].id, FONT_SIZES[i].id));
+  }
+  const fontItem = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('字号', '', '');
+  fontItem.setSubmenu(fontMenu);
+  menu.addItem(fontItem);
+
   const themeMenu = $.NSMenu.alloc.initWithTitle('外观');
   themeMenu.setAutoenablesItems(false);
   themeMenu.addItem(menuItem('自动（跟随 Qoder）', 'themeAuto:', state.theme === 'auto', null));
@@ -1866,6 +2087,7 @@ function menuSignature() {
   const parts = state.recent.map(function (r) { return r.session_id + ':' + (r.title || ''); });
   return parts.join('|') + '#' + (state.pinned || '') + '#' + state.sessionId + '#' +
     (state.panelHidden ? 1 : 0) + '#' + state.layout + '#' + state.theme + '#' +
+    state.fontSize + '#' + JSON.stringify(state.display) + '#' +
     (state.autoStart ? 1 : 0) + '#' + (state.closeWithQoder ? 1 : 0);
 }
 
@@ -1900,22 +2122,6 @@ function resetPosition() {
   applyWindowLayout();
 }
 
-function applyWidthPreset(width) {
-  state.widths.title = width;
-  state.widths.top = width;
-  state.widths.bottom = width;
-  saveSettings();
-  if (state.layout !== 'sidebar') {
-    if (panel) panel.orderOut(null);
-    if (indicatorPanel) indicatorPanel.orderOut(null);
-    buildUI(state.layout);
-    applyWindowLayout();
-    refreshVisibility();
-    updateUI();
-  }
-  updateSettingsControls();
-}
-
 function toggleBottomAutoHide() {
   state.bottomAutoHide = !state.bottomAutoHide;
   state.bottomRevealed = state.bottomAutoHide ? false : true;
@@ -1948,6 +2154,13 @@ function sCheckbox(title, frame, action, checked) {
   b.setState(checked ? 1 : 0);
   b.setTarget(controller);
   b.setAction(action);
+  return b;
+}
+
+function sFieldCheckbox(title, frame, index, checked) {
+  const b = sCheckbox(title, frame, 'settingsToggleField:', checked);
+  b.setFont($.NSFont.systemFontOfSize(11));
+  b.setTag(index);
   return b;
 }
 
@@ -2033,7 +2246,7 @@ function fetchLatestRelease() {
 
 function buildSettingsWindow() {
   settingsPanel = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-    $.NSMakeRect(0, 0, 420, 520),
+    $.NSMakeRect(0, 0, 420, 640),
     3, // titled + closable
     $.NSBackingStoreBuffered,
     false
@@ -2044,73 +2257,90 @@ function buildSettingsWindow() {
   settingsPanel.setLevel(26);
 
   const root = settingsPanel.contentView;
-  settingsHeaderBox = box([20, 474, 28, 28], T.greenTint, 8, 0, null);
+  settingsHeaderBox = box([20, 594, 28, 28], T.greenTint, 8, 0, null);
   root.addSubview(settingsHeaderBox);
-  settingsHeaderIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26, 480, 16, 16));
+  settingsHeaderIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26, 600, 16, 16));
   const headerImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('gauge', 'Qoder Meter');
   if (headerImage && !headerImage.isNil()) {
     settingsHeaderIcon.setImage(headerImage);
     try { settingsHeaderIcon.setContentTintColor(T.green); } catch (e) {}
   }
   root.addSubview(settingsHeaderIcon);
-  root.addSubview(sLabel('Qoder Meter', [58, 482, 300, 24], 17, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('状态条显示、启动与会话跟随', [60, 462, 300, 16], 11, $.NSFontWeightRegular,
+  root.addSubview(sLabel('Qoder Meter', [58, 602, 300, 24], 17, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('状态条显示、启动与会话跟随', [60, 582, 300, 16], 11, $.NSFontWeightRegular,
     $.NSColor.secondaryLabelColor));
 
-  settingsUpdateButton = sButton('检查更新', [274, 478, 126, 28], 'checkUpdates:');
+  settingsUpdateButton = sButton('检查更新', [274, 598, 126, 28], 'checkUpdates:');
   try {
     settingsUpdateButton.setFont($.NSFont.systemFontOfSize(11));
     settingsUpdateButton.setToolTip('点击后访问 GitHub Releases 检查新版本');
   } catch (e) {}
   root.addSubview(settingsUpdateButton);
-  settingsUpdateLabel = sLabel('v' + appVersion(), [270, 456, 130, 15], 9.5,
+  settingsUpdateLabel = sLabel('v' + appVersion(), [270, 576, 130, 15], 9.5,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
   try { settingsUpdateLabel.setAlignment(2); } catch (e) {}
   root.addSubview(settingsUpdateLabel);
 
-  root.addSubview(sLabel('启动与退出', [20, 432, 340, 18], 11, $.NSFontWeightSemibold));
-  settingsAutoStart = sCheckbox('随 Qoder 自动启动', [20, 404, 360, 24],
+  root.addSubview(sLabel('启动与退出', [20, 552, 340, 18], 11, $.NSFontWeightSemibold));
+  settingsAutoStart = sCheckbox('随 Qoder 自动启动', [20, 524, 360, 24],
     'settingsToggleAutoStart:', state.autoStart);
-  settingsClose = sCheckbox('Qoder 退出时关闭', [20, 378, 360, 24],
+  settingsClose = sCheckbox('Qoder 退出时关闭', [20, 498, 360, 24],
     'settingsToggleClose:', state.closeWithQoder);
   root.addSubview(settingsAutoStart);
   root.addSubview(settingsClose);
-  root.addSubview(sSeparator(362));
+  root.addSubview(sSeparator(482));
 
-  root.addSubview(sLabel('显示', [20, 336, 340, 18], 11, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('显示位置', [20, 308, 90, 18], 11));
+  root.addSubview(sLabel('显示', [20, 456, 340, 18], 11, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('显示位置', [20, 428, 90, 18], 11));
   settingsPosPopup = sPopup(['侧边栏卡片（推荐）', '窗口标题栏（融入顶部）', '窗口上方（贴外）', '窗口下方（贴外）'],
     state.layout === 'sidebar' ? 0 : (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)),
-    [118, 304, 282, 26], 'settingsPosChanged:');
+    [118, 424, 282, 26], 'settingsPosChanged:');
   try { settingsPosPopup.setToolTip('全屏时贴外形态会收成屏幕边缘细线，悬停展开'); } catch (e) {}
   root.addSubview(settingsPosPopup);
 
-  root.addSubview(sLabel('贴外条宽度', [20, 276, 90, 18], 11));
-  const currentWidth = state.layout === 'top' ? state.widths.top : state.widths.bottom;
-  const widthIndex = currentWidth <= 680 ? 0 : (currentWidth >= 880 ? 2 : 1);
-  settingsWidthPopup = sPopup(['紧凑（640）', '标准（800）', '宽（960）'], widthIndex,
-    [118, 272, 282, 26], 'settingsWidthChanged:');
-  try { settingsWidthPopup.setToolTip('仅影响窗口上方/下方贴外条；标题栏使用紧凑宽度'); } catch (e) {}
-  root.addSubview(settingsWidthPopup);
+  root.addSubview(sLabel('字号', [20, 396, 90, 18], 11));
+  let fontIndex = 0;
+  const fontLabels = [];
+  for (let i = 0; i < FONT_SIZES.length; i++) {
+    fontLabels.push(FONT_SIZES[i].label);
+    if (FONT_SIZES[i].id === state.fontSize) fontIndex = i;
+  }
+  settingsFontPopup = sPopup(fontLabels, fontIndex,
+    [118, 392, 282, 26], 'settingsFontChanged:');
+  try { settingsFontPopup.setToolTip('作用于标题栏、窗口上方和下方状态条；宽度会随字号自动调整'); } catch (e) {}
+  root.addSubview(settingsFontPopup);
 
-  root.addSubview(sLabel('外观', [20, 244, 90, 18], 11));
+  root.addSubview(sLabel('外观', [20, 364, 90, 18], 11));
   settingsThemePopup = sPopup(SKIN_NAMES, Math.max(0, SKIN_IDS.indexOf(state.theme)),
-    [118, 240, 282, 26], 'settingsThemeChanged:');
+    [118, 360, 282, 26], 'settingsThemeChanged:');
   try { settingsThemePopup.setToolTip('自动会跟随 Qoder 的深浅色；Qoder 未设置时跟随系统'); } catch (e) {}
   root.addSubview(settingsThemePopup);
 
-  settingsBottomAutoHide = sCheckbox('下方空间不足时自动隐藏', [20, 210, 360, 24],
+  settingsBottomAutoHide = sCheckbox('下方空间不足时自动隐藏', [20, 330, 360, 24],
     'settingsBottomAutoHideToggle:', state.bottomAutoHide);
   root.addSubview(settingsBottomAutoHide);
-  root.addSubview(sSeparator(192));
+  root.addSubview(sSeparator(312));
 
-  root.addSubview(sLabel('会话', [20, 166, 340, 18], 11, $.NSFontWeightSemibold));
-  settingsFollow = sCheckbox('自动跟随当前打开的会话', [20, 138, 360, 24],
+  root.addSubview(sLabel('显示内容', [20, 286, 340, 18], 11, $.NSFontWeightSemibold));
+  settingsFieldChecks = [];
+  for (let i = 0; i < DISPLAY_FIELDS.length; i++) {
+    const field = DISPLAY_FIELDS[i];
+    const col = i % 5;
+    const row = Math.floor(i / 5);
+    const cb = sFieldCheckbox(field.label, [20 + col * 72, row === 0 ? 260 : 236, 70, 22],
+      i, !!state.display[field.id]);
+    settingsFieldChecks.push(cb);
+    root.addSubview(cb);
+  }
+  root.addSubview(sSeparator(216));
+
+  root.addSubview(sLabel('会话', [20, 190, 340, 18], 11, $.NSFontWeightSemibold));
+  settingsFollow = sCheckbox('自动跟随当前打开的会话', [20, 162, 360, 24],
     'settingsFollowToggle:', state.pinned ? false : true);
   root.addSubview(settingsFollow);
-  root.addSubview(sLabel('关闭后可在菜单中手动选择并固定会话。', [20, 114, 380, 16], 10,
+  root.addSubview(sLabel('关闭后可在菜单中手动选择并固定会话。', [20, 138, 380, 16], 10,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
-  root.addSubview(sLabel('拖动卡片顶部可移动；宽度对标题栏和底部条生效。', [20, 90, 380, 16], 10,
+  root.addSubview(sLabel('状态条宽度随显示内容与字号自适应；拖动卡片顶部可移动。', [20, 114, 380, 16], 10,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
   root.addSubview(sButton('重置当前位置', [20, 36, 140, 28], 'resetPosition:', null));
@@ -2127,8 +2357,16 @@ function updateSettingsControls() {
     settingsBottomAutoHide.setState(state.bottomAutoHide ? 1 : 0);
     settingsPosPopup.selectItemAtIndex(state.layout === 'sidebar' ? 0 :
       (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)));
-    const width = state.layout === 'bottom' ? state.widths.bottom : state.widths.top;
-    settingsWidthPopup.selectItemAtIndex(width <= 680 ? 0 : (width >= 880 ? 2 : 1));
+    if (settingsFontPopup) {
+      let fontIndex = 0;
+      for (let i = 0; i < FONT_SIZES.length; i++) {
+        if (FONT_SIZES[i].id === state.fontSize) fontIndex = i;
+      }
+      settingsFontPopup.selectItemAtIndex(fontIndex);
+    }
+    for (let i = 0; i < settingsFieldChecks.length && i < DISPLAY_FIELDS.length; i++) {
+      settingsFieldChecks[i].setState(state.display[DISPLAY_FIELDS[i].id] ? 1 : 0);
+    }
     settingsThemePopup.selectItemAtIndex(Math.max(0, SKIN_IDS.indexOf(state.theme)));
     const dark = state.resolvedSkin === 'graphite' || state.resolvedSkin === 'dusk';
     const name = dark ? $.NSAppearanceNameDarkAqua : $.NSAppearanceNameAqua;
@@ -2179,6 +2417,28 @@ function setTheme(theme) {
     updateSettingsControls();
     buildMenu();
   }
+}
+
+function setFontSize(id) {
+  let valid = false;
+  for (let i = 0; i < FONT_SIZES.length; i++) {
+    if (FONT_SIZES[i].id === id) valid = true;
+  }
+  if (!valid || id === state.fontSize) {
+    buildMenu();
+    return;
+  }
+  state.fontSize = id;
+  applyFontScale();
+  saveSettings();
+  rebuildPanelUI();
+}
+
+function toggleDisplayField(id) {
+  if (typeof state.display[id] !== 'boolean') return;
+  state.display[id] = !state.display[id];
+  saveSettings();
+  rebuildPanelUI();
 }
 
 function syncAutoTheme() {
@@ -2386,14 +2646,6 @@ ObjC.registerSubclass({
         updateSettingsControls();
       }
     },
-    'settingsWidthChanged:': {
-      types: ['void', ['id']],
-      implementation: function (sender) {
-        const idx = Number(settingsWidthPopup.indexOfSelectedItem);
-        applyWidthPreset(idx === 0 ? 640 : (idx === 2 ? 960 : 800));
-        updateSettingsControls();
-      }
-    },
     'settingsBottomAutoHideToggle:': {
       types: ['void', ['id']],
       implementation: function (sender) {
@@ -2407,6 +2659,34 @@ ObjC.registerSubclass({
         const idx = Number(settingsThemePopup.indexOfSelectedItem);
         setTheme(SKIN_IDS[idx] || 'auto');
         updateSettingsControls();
+      }
+    },
+    'settingsFontChanged:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const idx = Number(settingsFontPopup.indexOfSelectedItem);
+        const font = FONT_SIZES[idx] || FONT_SIZES[1];
+        setFontSize(font.id);
+      }
+    },
+    'settingsToggleField:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const idx = Number(sender.tag);
+        const field = DISPLAY_FIELDS[idx];
+        if (field) toggleDisplayField(field.id);
+      }
+    },
+    'fontSizeMenu:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        setFontSize(representedId(sender));
+      }
+    },
+    'toggleDisplay:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        toggleDisplayField(representedId(sender));
       }
     },
     'checkUpdates:': {
@@ -2738,6 +3018,7 @@ function main() {
   controller = $.QoderMeterController.alloc.init;
 
   loadSettings();
+  applyFontScale();
 
   try {
     const fm = $.NSFileManager.defaultManager;
