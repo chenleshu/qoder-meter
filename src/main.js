@@ -265,6 +265,8 @@ let settingsThemePopup = null;
 let settingsBottomAutoHide = null;
 let settingsUpdateButton = null;
 let settingsUpdateLabel = null;
+let settingsHeaderBox = null;
+let settingsHeaderIcon = null;
 
 /* ---------------------------------------------------------------- utils */
 
@@ -2022,14 +2024,15 @@ function buildSettingsWindow() {
   settingsPanel.setLevel(26);
 
   const root = settingsPanel.contentView;
-  root.addSubview(box([20, 474, 28, 28], T.greenTint, 8, 0, null));
-  const headerIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26, 480, 16, 16));
+  settingsHeaderBox = box([20, 474, 28, 28], T.greenTint, 8, 0, null);
+  root.addSubview(settingsHeaderBox);
+  settingsHeaderIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26, 480, 16, 16));
   const headerImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('gauge', 'Qoder Meter');
   if (headerImage && !headerImage.isNil()) {
-    headerIcon.setImage(headerImage);
-    try { headerIcon.setContentTintColor(T.green); } catch (e) {}
+    settingsHeaderIcon.setImage(headerImage);
+    try { settingsHeaderIcon.setContentTintColor(T.green); } catch (e) {}
   }
-  root.addSubview(headerIcon);
+  root.addSubview(settingsHeaderIcon);
   root.addSubview(sLabel('Qoder Meter', [58, 482, 300, 24], 17, $.NSFontWeightSemibold));
   root.addSubview(sLabel('状态条显示、启动与会话跟随', [60, 462, 300, 16], 11, $.NSFontWeightRegular,
     $.NSColor.secondaryLabelColor));
@@ -2112,6 +2115,8 @@ function updateSettingsControls() {
     const name = dark ? $.NSAppearanceNameDarkAqua : $.NSAppearanceNameAqua;
     const appearance = $.NSAppearance.appearanceNamed(name);
     if (appearance && !appearance.isNil()) settingsPanel.setAppearance(appearance);
+    if (settingsHeaderBox) settingsHeaderBox.setFillColor(T.greenTint);
+    if (settingsHeaderIcon) settingsHeaderIcon.setContentTintColor(T.green);
   } catch (e) {
     logError('updateSettingsControls', e);
   }
