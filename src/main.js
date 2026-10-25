@@ -31,6 +31,7 @@ const PAUSE_FLAG = SETTINGS_DIR + '/autostart-paused';
 const KEEP_FLAG = SETTINGS_DIR + '/keep-running';
 
 const BAR_H_TITLE = 26;
+const BAR_H_TOP = 30;
 const BAR_H_BOTTOM = 30;
 const CARD_W = 232;
 const CARD_H = 210;
@@ -88,7 +89,7 @@ const state = {
   layout: 'sidebar',
   theme: 'light',
   positions: {},
-  widths: { title: 800, bottom: 800 },
+  widths: { title: 800, top: 800, bottom: 800 },
   bottomAutoHide: true,
   bottomRevealed: false,
   bottomOutside: false,
@@ -318,7 +319,7 @@ function loadSettings() {
       let layout = obj.layout;
       if (layout === 'above') layout = 'title';
       if (layout === 'below') layout = 'bottom';
-      if (layout === 'sidebar' || layout === 'title' || layout === 'bottom') {
+      if (layout === 'sidebar' || layout === 'title' || layout === 'top' || layout === 'bottom') {
         state.layout = layout;
       }
       if (obj.theme === 'light' || obj.theme === 'dark') {
@@ -329,7 +330,11 @@ function loadSettings() {
       }
       if (obj.widths && typeof obj.widths === 'object') {
         if (isFinite(obj.widths.title)) state.widths.title = Math.max(560, Math.min(1200, Number(obj.widths.title)));
+        if (isFinite(obj.widths.top)) state.widths.top = Math.max(560, Math.min(1200, Number(obj.widths.top)));
         if (isFinite(obj.widths.bottom)) state.widths.bottom = Math.max(560, Math.min(1200, Number(obj.widths.bottom)));
+        if (!isFinite(obj.widths.top) && isFinite(obj.widths.bottom)) {
+          state.widths.top = state.widths.bottom;
+        }
       }
       if (typeof obj.bottomAutoHide === 'boolean') {
         state.bottomAutoHide = obj.bottomAutoHide;
@@ -1012,8 +1017,8 @@ function buildSidebar(root) {
 }
 
 function buildBar(root, mode) {
-  const W = mode === 'title' ? state.widths.title : state.widths.bottom;
-  const H = mode === 'title' ? BAR_H_TITLE : BAR_H_BOTTOM;
+  const W = mode === 'title' ? state.widths.title : (mode === 'top' ? state.widths.top : state.widths.bottom);
+  const H = mode === 'title' ? BAR_H_TITLE : (mode === 'top' ? BAR_H_TOP : BAR_H_BOTTOM);
   const y = H === BAR_H_TITLE ? 5 : 7;
   const stateW = 70;
   const isTitleMode = mode === 'title';
@@ -1081,8 +1086,9 @@ function buildUI(mode) {
   resetUI();
   const isCard = state.layout === 'sidebar';
   const isTitle = state.layout === 'title';
-  const w = isCard ? CARD_W : (isTitle ? state.widths.title : state.widths.bottom);
-  const h = isCard ? CARD_H : (isTitle ? BAR_H_TITLE : BAR_H_BOTTOM);
+  const isTop = state.layout === 'top';
+  const w = isCard ? CARD_W : (isTitle ? state.widths.title : (isTop ? state.widths.top : state.widths.bottom));
+  const h = isCard ? CARD_H : (isTitle ? BAR_H_TITLE : (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
   const root = makePanel(w, h);
   panel.setHasShadow(!isTitle);
 
@@ -1324,10 +1330,11 @@ function applyWindowLayout() {
   const bottom = sh - (b.y + b.height);
   const isCard = state.layout === 'sidebar';
   const isTitle = state.layout === 'title';
+  const isTop = state.layout === 'top';
   const isBottom = state.layout === 'bottom';
   if (!isBottom) state.bottomOutside = false;
-  const w = isCard ? CARD_W : (isTitle ? state.widths.title : state.widths.bottom);
-  const h = isCard ? CARD_H : (isTitle ? BAR_H_TITLE : BAR_H_BOTTOM);
+  const w = isCard ? CARD_W : (isTitle ? state.widths.title : (isTop ? state.widths.top : state.widths.bottom));
+  const h = isCard ? CARD_H : (isTitle ? BAR_H_TITLE : (isTop ? BAR_H_TOP : BAR_H_BOTTOM));
 
   const saved = state.positions[state.layout];
   const hasSaved = !!(saved && isFinite(saved.dx) && isFinite(saved.dy));
@@ -1337,6 +1344,15 @@ function applyWindowLayout() {
   if (isTitle) {
     x = b.x + (hasSaved ? Number(saved.dx) : 300);
     y = bottom + b.height - h - 3;
+  } else if (isTop) {
+    const roomAbove = (b.y - h - 4) >= 34;
+    if (roomAbove) {
+      x = b.x + 8;
+      y = bottom + b.height + 4;
+    } else {
+      x = b.x + 300;
+      y = bottom + b.height - h - 3;
+    }
   } else if (isBottom) {
     const visibleBottom = Number(screen.visibleFrame.origin.y);
     state.bottomOutside = (bottom - h - 4) >= visibleBottom + 4;
@@ -1486,6 +1502,7 @@ function buildMenu() {
   posMenu.setAutoenablesItems(false);
   posMenu.addItem(menuItem('侧边栏卡片（推荐）', 'layoutSidebar:', state.layout === 'sidebar', null));
   posMenu.addItem(menuItem('窗口标题栏（融入顶部）', 'layoutTitle:', state.layout === 'title', null));
+  posMenu.addItem(menuItem('窗口上方（贴外）', 'layoutTop:', state.layout === 'top', null));
   posMenu.addItem(menuItem('窗口下方（贴外）', 'layoutBottom:', state.layout === 'bottom', null));
   posMenu.addItem($.NSMenuItem.separatorItem);
   posMenu.addItem(menuItem('重置当前位置', 'resetPosition:', null, null));
@@ -1552,6 +1569,7 @@ function resetPosition() {
 
 function applyWidthPreset(width) {
   state.widths.title = width;
+  state.widths.top = width;
   state.widths.bottom = width;
   saveSettings();
   if (state.layout !== 'sidebar') {
@@ -1653,13 +1671,14 @@ function buildSettingsWindow() {
 
   root.addSubview(sLabel('显示', [20, 336, 340, 18], 11, $.NSFontWeightSemibold));
   root.addSubview(sLabel('显示位置', [20, 308, 90, 18], 11));
-  settingsPosPopup = sPopup(['侧边栏卡片（推荐）', '窗口标题栏（融入顶部）', '窗口下方（贴外）'],
-    state.layout === 'sidebar' ? 0 : (state.layout === 'title' ? 1 : 2),
+  settingsPosPopup = sPopup(['侧边栏卡片（推荐）', '窗口标题栏（融入顶部）', '窗口上方（贴外）', '窗口下方（贴外）'],
+    state.layout === 'sidebar' ? 0 : (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)),
     [118, 304, 282, 26], 'settingsPosChanged:');
   root.addSubview(settingsPosPopup);
 
   root.addSubview(sLabel('状态条宽度', [20, 276, 90, 18], 11));
-  const currentWidth = state.layout === 'title' ? state.widths.title : state.widths.bottom;
+  const currentWidth = state.layout === 'title' ? state.widths.title :
+    (state.layout === 'top' ? state.widths.top : state.widths.bottom);
   const widthIndex = currentWidth <= 680 ? 0 : (currentWidth >= 880 ? 2 : 1);
   settingsWidthPopup = sPopup(['紧凑（640）', '标准（800）', '宽（960）'], widthIndex,
     [118, 272, 282, 26], 'settingsWidthChanged:');
@@ -1696,8 +1715,10 @@ function updateSettingsControls() {
     settingsClose.setState(state.closeWithQoder ? 1 : 0);
     settingsFollow.setState(state.pinned ? 0 : 1);
     settingsBottomAutoHide.setState(state.bottomAutoHide ? 1 : 0);
-    settingsPosPopup.selectItemAtIndex(state.layout === 'sidebar' ? 0 : (state.layout === 'title' ? 1 : 2));
-    const width = state.layout === 'title' ? state.widths.title : state.widths.bottom;
+    settingsPosPopup.selectItemAtIndex(state.layout === 'sidebar' ? 0 :
+      (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)));
+    const width = state.layout === 'title' ? state.widths.title :
+      (state.layout === 'top' ? state.widths.top : state.widths.bottom);
     settingsWidthPopup.selectItemAtIndex(width <= 680 ? 0 : (width >= 880 ? 2 : 1));
     settingsThemePopup.selectItemAtIndex(state.theme === 'dark' ? 1 : 0);
     const name = state.theme === 'dark' ? $.NSAppearanceNameDarkAqua : $.NSAppearanceNameAqua;
@@ -1739,7 +1760,7 @@ function setTheme(theme) {
 }
 
 function setLayout(mode) {
-  if (mode !== 'sidebar' && mode !== 'title' && mode !== 'bottom') return;
+  if (mode !== 'sidebar' && mode !== 'title' && mode !== 'top' && mode !== 'bottom') return;
   if (mode === state.layout) {
     buildMenu();
     return;
@@ -1828,6 +1849,10 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function (sender) { setLayout('title'); }
     },
+    'layoutTop:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setLayout('top'); }
+    },
     'layoutBottom:': {
       types: ['void', ['id']],
       implementation: function (sender) { setLayout('bottom'); }
@@ -1905,7 +1930,7 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function (sender) {
         const idx = Number(settingsPosPopup.indexOfSelectedItem);
-        setLayout(idx === 0 ? 'sidebar' : (idx === 1 ? 'title' : 'bottom'));
+        setLayout(idx === 0 ? 'sidebar' : (idx === 1 ? 'title' : (idx === 2 ? 'top' : 'bottom')));
         updateSettingsControls();
       }
     },
