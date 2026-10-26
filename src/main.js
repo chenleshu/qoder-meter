@@ -55,10 +55,10 @@ const STATS_MODES = [
 ];
 
 const FONT_SIZES = [
-  { id: 'small', label: '小', scale: 0.9 },
-  { id: 'normal', label: '标准', scale: 1 },
-  { id: 'large', label: '大', scale: 1.12 },
-  { id: 'xlarge', label: '特大', scale: 1.24 }
+  { id: 'small', label: '小', scale: 0.96 },
+  { id: 'normal', label: '标准', scale: 1.08 },
+  { id: 'large', label: '大', scale: 1.2 },
+  { id: 'xlarge', label: '特大', scale: 1.32 }
 ];
 
 const DISPLAY_FIELDS = [
@@ -2405,7 +2405,7 @@ function toggleBottomAutoHide() {
   updateSettingsControls();
 }
 
-function sLabel(str, frame, size, weight, color) {
+function sLabel(str, frame, size, weight, color, align) {
   const f = $.NSTextField.alloc.initWithFrame($.NSMakeRect(frame[0], frame[1], frame[2], frame[3]));
   f.setStringValue(str);
   f.setBezeled(false);
@@ -2415,6 +2415,7 @@ function sLabel(str, frame, size, weight, color) {
   f.setFont($.NSFont.systemFontOfSizeWeight(size || 11,
     weight === undefined ? $.NSFontWeightRegular : weight));
   f.setTextColor(color || $.NSColor.labelColor);
+  if (align !== undefined) f.setAlignment(align);
   return f;
 }
 
@@ -2422,7 +2423,7 @@ function sCheckbox(title, frame, action, checked) {
   const b = $.NSButton.alloc.initWithFrame($.NSMakeRect(frame[0], frame[1], frame[2], frame[3]));
   b.setButtonType($.NSButtonTypeSwitch);
   b.setTitle(title);
-  b.setFont($.NSFont.systemFontOfSize(12));
+  b.setFont($.NSFont.systemFontOfSize(12.5));
   b.setState(checked ? 1 : 0);
   b.setTarget(controller);
   b.setAction(action);
@@ -2431,7 +2432,7 @@ function sCheckbox(title, frame, action, checked) {
 
 function sFieldCheckbox(title, frame, index, checked) {
   const b = sCheckbox(title, frame, 'settingsToggleField:', checked);
-  b.setFont($.NSFont.systemFontOfSize(11));
+  b.setFont($.NSFont.systemFontOfSize(11.5));
   b.setTag(index);
   return b;
 }
@@ -2518,7 +2519,7 @@ function fetchLatestRelease() {
 
 function buildSettingsWindow() {
   settingsPanel = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-    $.NSMakeRect(0, 0, 420, 640),
+    $.NSMakeRect(0, 0, 460, 680),
     3, // titled + closable
     $.NSBackingStoreBuffered,
     false
@@ -2529,48 +2530,48 @@ function buildSettingsWindow() {
   settingsPanel.setLevel(26);
 
   const root = settingsPanel.contentView;
-  settingsHeaderBox = box([20, 594, 28, 28], T.greenTint, 8, 0, null);
+  settingsHeaderBox = box([22, 634, 30, 30], T.greenTint, 9, 0, null);
   root.addSubview(settingsHeaderBox);
-  settingsHeaderIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26, 600, 16, 16));
+  settingsHeaderIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(29, 641, 16, 16));
   const headerImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('gauge', 'Qoder Meter');
   if (headerImage && !headerImage.isNil()) {
     settingsHeaderIcon.setImage(headerImage);
     try { settingsHeaderIcon.setContentTintColor(T.green); } catch (e) {}
   }
   root.addSubview(settingsHeaderIcon);
-  root.addSubview(sLabel('Qoder Meter', [58, 602, 300, 24], 17, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('状态条显示、启动与会话跟随', [60, 582, 300, 16], 11, $.NSFontWeightRegular,
-    $.NSColor.secondaryLabelColor));
+  root.addSubview(sLabel('Qoder Meter', [64, 638, 300, 26], 18, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('状态条显示、启动与会话跟随', [66, 618, 320, 17], 11.5,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
-  settingsUpdateButton = sButton('检查更新', [274, 598, 126, 28], 'checkUpdates:');
+  settingsUpdateButton = sButton('检查更新', [314, 632, 126, 30], 'checkUpdates:');
   try {
-    settingsUpdateButton.setFont($.NSFont.systemFontOfSize(11));
+    settingsUpdateButton.setFont($.NSFont.systemFontOfSize(12));
     settingsUpdateButton.setToolTip('点击后访问 GitHub Releases 检查新版本');
   } catch (e) {}
   root.addSubview(settingsUpdateButton);
-  settingsUpdateLabel = sLabel('v' + appVersion(), [270, 576, 130, 15], 9.5,
+  settingsUpdateLabel = sLabel('v' + appVersion(), [310, 610, 130, 16], 10,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
   try { settingsUpdateLabel.setAlignment(2); } catch (e) {}
   root.addSubview(settingsUpdateLabel);
 
-  root.addSubview(sLabel('启动与退出', [20, 552, 340, 18], 11, $.NSFontWeightSemibold));
-  settingsAutoStart = sCheckbox('随 Qoder 自动启动', [20, 524, 360, 24],
+  root.addSubview(sLabel('启动与退出', [22, 584, 400, 18], 12.5, $.NSFontWeightSemibold));
+  settingsAutoStart = sCheckbox('随 Qoder 自动启动', [22, 554, 420, 26],
     'settingsToggleAutoStart:', state.autoStart);
-  settingsClose = sCheckbox('Qoder 退出时关闭', [20, 498, 360, 24],
+  settingsClose = sCheckbox('Qoder 退出时关闭', [22, 526, 420, 26],
     'settingsToggleClose:', state.closeWithQoder);
   root.addSubview(settingsAutoStart);
   root.addSubview(settingsClose);
-  root.addSubview(sSeparator(482));
+  root.addSubview(sSeparator(506));
 
-  root.addSubview(sLabel('显示', [20, 456, 340, 18], 11, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('显示位置', [20, 428, 90, 18], 11));
+  root.addSubview(sLabel('显示', [22, 478, 400, 18], 12.5, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('显示位置', [22, 448, 100, 18], 12));
   settingsPosPopup = sPopup(['侧边栏卡片（推荐）', '窗口标题栏（融入顶部）', '窗口上方（贴外）', '窗口下方（贴外）'],
     state.layout === 'sidebar' ? 0 : (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)),
-    [118, 424, 282, 26], 'settingsPosChanged:');
+    [142, 442, 296, 30], 'settingsPosChanged:');
   try { settingsPosPopup.setToolTip('全屏时贴外形态会收成屏幕边缘细线，悬停展开'); } catch (e) {}
   root.addSubview(settingsPosPopup);
 
-  root.addSubview(sLabel('字号', [20, 396, 90, 18], 11));
+  root.addSubview(sLabel('字号', [22, 410, 100, 18], 12));
   let fontIndex = 0;
   const fontLabels = [];
   for (let i = 0; i < FONT_SIZES.length; i++) {
@@ -2578,49 +2579,48 @@ function buildSettingsWindow() {
     if (FONT_SIZES[i].id === state.fontSize) fontIndex = i;
   }
   settingsFontPopup = sPopup(fontLabels, fontIndex,
-    [118, 392, 282, 26], 'settingsFontChanged:');
+    [142, 404, 296, 30], 'settingsFontChanged:');
   try { settingsFontPopup.setToolTip('作用于标题栏、窗口上方和下方状态条；宽度会随字号自动调整'); } catch (e) {}
   root.addSubview(settingsFontPopup);
 
-  root.addSubview(sLabel('外观', [20, 364, 90, 18], 11));
+  root.addSubview(sLabel('外观', [22, 372, 100, 18], 12));
   settingsThemePopup = sPopup(SKIN_NAMES, Math.max(0, SKIN_IDS.indexOf(state.theme)),
-    [118, 360, 282, 26], 'settingsThemeChanged:');
+    [142, 366, 296, 30], 'settingsThemeChanged:');
   try { settingsThemePopup.setToolTip('自动会跟随 Qoder 的深浅色；Qoder 未设置时跟随系统'); } catch (e) {}
   root.addSubview(settingsThemePopup);
 
-  settingsBottomAutoHide = sCheckbox('下方空间不足时自动隐藏', [20, 330, 360, 24],
+  settingsBottomAutoHide = sCheckbox('下方空间不足时自动隐藏', [22, 334, 420, 26],
     'settingsBottomAutoHideToggle:', state.bottomAutoHide);
   root.addSubview(settingsBottomAutoHide);
-  root.addSubview(sSeparator(312));
+  root.addSubview(sSeparator(314));
 
-  root.addSubview(sLabel('显示内容', [20, 286, 340, 18], 11, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('显示内容', [22, 284, 400, 18], 12.5, $.NSFontWeightSemibold));
   settingsFieldChecks = [];
   for (let i = 0; i < DISPLAY_FIELDS.length; i++) {
     const field = DISPLAY_FIELDS[i];
     const col = i % 5;
     const row = Math.floor(i / 5);
-    const cb = sFieldCheckbox(field.label, [20 + col * 72, row === 0 ? 260 : 236, 70, 22],
+    const cb = sFieldCheckbox(field.label, [22 + col * 84, row === 0 ? 252 : 222, 80, 24],
       i, !!state.display[field.id]);
     settingsFieldChecks.push(cb);
     root.addSubview(cb);
   }
-  root.addSubview(sSeparator(216));
+  root.addSubview(sSeparator(202));
 
-  root.addSubview(sLabel('会话', [20, 190, 340, 18], 11, $.NSFontWeightSemibold));
-  settingsFollow = sCheckbox('自动跟随当前打开的会话', [20, 162, 360, 24],
+  root.addSubview(sLabel('会话', [22, 174, 400, 18], 12.5, $.NSFontWeightSemibold));
+  settingsFollow = sCheckbox('自动跟随当前打开的会话', [22, 142, 420, 26],
     'settingsFollowToggle:', state.pinned ? false : true);
   root.addSubview(settingsFollow);
-  root.addSubview(sLabel('关闭后可在菜单中手动选择并固定会话。', [20, 138, 380, 16], 10,
+  root.addSubview(sLabel('关闭后可在菜单中手动选择并固定会话。', [22, 116, 430, 16], 10.5,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
-  root.addSubview(sLabel('状态条宽度随显示内容与字号自适应；拖动卡片顶部可移动。', [20, 114, 380, 16], 10,
+  root.addSubview(sLabel('状态条宽度随显示内容与字号自适应；拖动卡片顶部可移动。', [22, 92, 430, 16], 10.5,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
-  root.addSubview(sButton('重置当前位置', [20, 36, 140, 28], 'resetPosition:', null));
-  root.addSubview(sButton('用量统计', [170, 36, 110, 28], 'openStats:', null));
-  root.addSubview(sButton('完成', [300, 36, 100, 28], 'closeSettings:', '\r'));
+  root.addSubview(sButton('重置当前位置', [22, 36, 150, 32], 'resetPosition:', null));
+  root.addSubview(sButton('用量统计', [184, 36, 110, 32], 'openStats:', null));
+  root.addSubview(sButton('完成', [330, 36, 108, 32], 'closeSettings:', '\r'));
   settingsPanel.center;
 }
-
 function updateSettingsControls() {
   if (!settingsPanel) return;
   try {
@@ -2698,19 +2698,20 @@ function statsDayModelsText(day) {
   return parts.join(' · ');
 }
 
-function statsCard(root, x, labelText, valueText, color) {
-  root.addSubview(box([x, 432, 160, 62], T.grayTint, 10, 0, null));
-  root.addSubview(sLabel(labelText, [x + 12, 478, 136, 14], 9.2, $.NSFontWeightRegular,
-    $.NSColor.secondaryLabelColor));
-  root.addSubview(sLabel(valueText, [x + 12, 446, 136, 27], 17, $.NSFontWeightSemibold, color));
+function statsCard(root, x, y, labelText, valueText, color) {
+  root.addSubview(box([x, y, 184, 68], T.grayTint, 12, 0, null));
+  root.addSubview(sLabel(labelText, [x + 16, y + 44, 152, 16], 11,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+  root.addSubview(sLabel(valueText, [x + 16, y + 12, 152, 30], 21,
+    $.NSFontWeightSemibold, color));
 }
 
-function statsPick(root, title, x, w, tag, action, selected, tip) {
-  root.addSubview(box([x, 506, w, 26], selected ? T.greenTint : T.grayTint, 8, 0, null));
-  const b = sButton(title, [x, 506, w, 26], action, null);
+function statsPick(root, title, x, y, w, tag, action, selected, tip) {
+  root.addSubview(box([x, y, w, 30], selected ? T.greenTint : T.grayTint, 10, 0, null));
+  const b = sButton(title, [x, y, w, 30], action, null);
   try {
     b.setBordered(false);
-    b.setFont($.NSFont.systemFontOfSizeWeight(10.2,
+    b.setFont($.NSFont.systemFontOfSizeWeight(11.5,
       selected ? $.NSFontWeightSemibold : $.NSFontWeightRegular));
     b.setTag(tag);
     if (tip) b.setToolTip(tip);
@@ -2723,8 +2724,24 @@ function buildStatsWindow() {
     statsPanel.orderOut(null);
     statsPanel = null;
   }
-  const W = 540;
-  const H = 600;
+  const W = 620;
+  const data = statsForRange(state.statsRange);
+  state.statsData = data;
+  const direct = state.statsMode === 'direct';
+  const rowH = 54;
+  const modelRows = statsModelRows(data);
+  const dailyHeaderTop = 254 + modelRows.length * 24;
+  const rowsTop = dailyHeaderTop + 22;
+  const totalPages = Math.max(1, Math.ceil(data.days.length / STATS_PAGE_SIZE));
+  state.statsPage = Math.max(0, Math.min(state.statsPage, totalPages - 1));
+  const page = direct ? 0 : state.statsPage;
+  const days = data.days.slice(page * STATS_PAGE_SIZE, page * STATS_PAGE_SIZE + STATS_PAGE_SIZE);
+  const navVisible = !direct && totalPages > 1;
+  const footerTop = rowsTop + days.length * rowH + 8;
+  const H = days.length
+    ? (navVisible ? footerTop + 28 + 14 : rowsTop + days.length * rowH + 20)
+    : Math.max(360, dailyHeaderTop + 80);
+
   statsPanel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
     $.NSMakeRect(0, 0, W, H), 128, $.NSBackingStoreBuffered, false);
   statsPanel.setLevel(26);
@@ -2739,15 +2756,15 @@ function buildStatsWindow() {
   const statsAppearance = $.NSAppearance.appearanceNamed(appearanceName);
   if (statsAppearance && !statsAppearance.isNil()) statsPanel.setAppearance(statsAppearance);
 
+  const top = function (t, h) { return H - t - h; };
+  let statsSolidBg = T.bg;
+  try { statsSolidBg = T.bg.colorWithAlphaComponent(1); } catch (e) {}
   const root = statsPanel.contentView;
-  root.addSubview(box([0, 0, W, H], T.bg, 16, 1, T.border));
-  root.addSubview(box([20, H - 2, W - 40, 1], T.highlight, 0, 0, null));
+  root.addSubview(box([0, 0, W, H], statsSolidBg, 18, 1, T.border));
+  root.addSubview(box([22, H - 2, W - 44, 1], T.highlight, 0, 0, null));
 
-  const data = statsForRange(state.statsRange);
-  state.statsData = data;
-
-  root.addSubview(box([18, 558, 28, 28], T.greenTint, 8, 0, null));
-  const statsIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(24, 564, 16, 16));
+  root.addSubview(box([22, top(18, 30), 30, 30], T.greenTint, 9, 0, null));
+  const statsIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(29, top(18, 30) + 7, 16, 16));
   const statsImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('chart.bar.xaxis',
     '用量统计');
   if (statsImage && !statsImage.isNil()) {
@@ -2755,108 +2772,104 @@ function buildStatsWindow() {
     try { statsIcon.setContentTintColor(T.green); } catch (e) {}
   }
   root.addSubview(statsIcon);
-  root.addSubview(sLabel('用量统计', [54, 563, 240, 22], 15, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('本地日志 · 每日用量与单模型用量', [54, 544, 420, 14], 9.2,
+  root.addSubview(sLabel('用量统计', [64, top(14, 26), 300, 26], 17, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('本地日志 · 每日用量与单模型用量', [64, top(44, 17), 420, 17], 11,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
-  const close = sButton('×', [500, 566, 24, 24], 'closeStats:', null);
-  try { close.setBordered(false); close.setFont($.NSFont.systemFontOfSize(15)); } catch (e) {}
+  const close = sButton('×', [W - 48, top(18, 28), 28, 28], 'closeStats:', null);
+  try { close.setBordered(false); close.setFont($.NSFont.systemFontOfSize(17)); } catch (e) {}
   root.addSubview(close);
 
-  statsDragView = $.StatsDragView.alloc.initWithFrame($.NSMakeRect(0, 544, W - 50, 56));
+  statsDragView = $.StatsDragView.alloc.initWithFrame($.NSMakeRect(0, top(0, 64), W - 56, 64));
   root.addSubview(statsDragView);
 
-  const shortRangeLabels = ['7天', '30天', '本月', '一年'];
+  const ctrlY = top(70, 30);
+  const shortRangeLabels = ['7 天', '30 天', '本月', '一年'];
   for (let i = 0; i < STATS_RANGES.length; i++) {
-    statsPick(root, shortRangeLabels[i] || STATS_RANGES[i].label, 18 + i * 54, 48,
+    statsPick(root, shortRangeLabels[i] || STATS_RANGES[i].label, 22 + i * 70, ctrlY, 64,
       i, 'statsRangePick:', state.statsRange === STATS_RANGES[i].id, STATS_RANGES[i].label);
   }
   const shortModeLabels = ['悬停', '直接', '分页'];
   for (let i = 0; i < STATS_MODES.length; i++) {
-    statsPick(root, shortModeLabels[i] || STATS_MODES[i].label, 244 + i * 61, 55,
+    statsPick(root, shortModeLabels[i] || STATS_MODES[i].label, 318 + i * 68, ctrlY, 62,
       i, 'statsModePick:', state.statsMode === STATS_MODES[i].id, STATS_MODES[i].label);
   }
-  root.addSubview(sButton('刷新', [440, 506, 70, 26], 'statsRefresh:', null));
+  root.addSubview(sButton('刷新', [W - 92, ctrlY, 70, 30], 'statsRefresh:', null));
 
-  root.addSubview(sLabel(statsRangeText(data), [18, 486, 320, 14], 9,
+  root.addSubview(sLabel(statsRangeText(data), [22, top(108, 16), 460, 16], 11,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
-  statsCard(root, 18, '总积分', fmtCredits(data.credits), T.gold);
-  statsCard(root, 190, '总 Token', (data.estimated ? '≈ ' : '') + fmtStatsTokens(data.tokens), T.soft);
-  statsCard(root, 362, '请求数', fmtCount(data.requests), T.text);
+  const cardY = top(134, 68);
+  statsCard(root, 22, cardY, '总积分', fmtCredits(data.credits), T.gold);
+  statsCard(root, 218, cardY, '总 Token', (data.estimated ? '≈ ' : '') + fmtStatsTokens(data.tokens), T.soft);
+  statsCard(root, 414, cardY, '请求数', fmtCount(data.requests), T.text);
 
-  root.addSubview(sLabel('按模型', [18, 404, 200, 16], 10, $.NSFontWeightSemibold));
-  root.addSubview(sLabel(statsModelRows(data).length ? '积分 / Token' : '',
-    [360, 404, 162, 16], 9, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
-  const modelRows = statsModelRows(data);
+  root.addSubview(sLabel('按模型', [22, top(214, 18), 200, 18], 11.5, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('积分', [410, top(214, 18), 80, 18], 11,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2));
+  root.addSubview(sLabel('Token', [500, top(214, 18), 98, 18], 11,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2));
+
   if (!modelRows.length) {
-    root.addSubview(sLabel('暂无模型记录', [18, 374, 300, 16], 9.5, $.NSFontWeightRegular,
-      $.NSColor.secondaryLabelColor));
+    root.addSubview(sLabel('暂无模型记录', [22, top(242, 18), 300, 18], 10.5,
+      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
   } else {
     for (let i = 0; i < modelRows.length; i++) {
       const m = modelRows[i];
-      const y = 382 - i * 22;
-      const nameLabel = sLabel(m.name, [18, y, 190, 16], 9.6, $.NSFontWeightMedium, T.text);
+      const y = top(238 + i * 24, 20);
+      const nameLabel = sLabel(m.name, [22, y, 340, 20], 11.5, $.NSFontWeightMedium, T.text);
       try { nameLabel.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
       root.addSubview(nameLabel);
-      const val = fmtCredits(m.credits) + ' · ' + (m.estimated ? '≈ ' : '') +
-        fmtStatsTokens(m.tokens) + ' tok';
-      const valueLabel = sLabel(val, [210, y, 312, 16], 9.2, $.NSFontWeightRegular, T.soft);
-      try { valueLabel.setAlignment(2); } catch (e) {}
-      root.addSubview(valueLabel);
+      const creditsLabel = sLabel(fmtCredits(m.credits), [410, y, 80, 20], 11,
+        $.NSFontWeightRegular, T.soft);
+      try { creditsLabel.setAlignment(2); } catch (e) {}
+      root.addSubview(creditsLabel);
+      const tokensLabel = sLabel((m.estimated ? '≈ ' : '') + fmtStatsTokens(m.tokens),
+        [500, y, 98, 20], 11, $.NSFontWeightRegular, T.soft);
+      try { tokensLabel.setAlignment(2); } catch (e) {}
+      root.addSubview(tokensLabel);
     }
   }
 
-  const direct = state.statsMode === 'direct';
-  const pageSize = STATS_PAGE_SIZE;
-  const totalPages = Math.max(1, Math.ceil(data.days.length / pageSize));
-  state.statsPage = Math.max(0, Math.min(state.statsPage, totalPages - 1));
-  const page = direct ? 0 : state.statsPage;
-  const days = data.days.slice(page * pageSize, page * pageSize + pageSize);
-
-  root.addSubview(sLabel(direct ? '按天（最近 5 天）' : '按天', [18, 286, 200, 16], 10,
-    $.NSFontWeightSemibold));
+  root.addSubview(sLabel(direct ? '按天（最近 5 天）' : '按天', [22, top(dailyHeaderTop, 18), 300, 18],
+    11.5, $.NSFontWeightSemibold));
   if (!direct) {
-    const pageLabel = sLabel((page + 1) + ' / ' + totalPages, [392, 286, 130, 16], 9.2,
-      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
-    try { pageLabel.setAlignment(2); } catch (e) {}
+    const pageLabel = sLabel((page + 1) + ' / ' + totalPages, [430, top(dailyHeaderTop, 18), 168, 18],
+      11, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2);
     root.addSubview(pageLabel);
   }
 
   if (!days.length) {
-    const empty = sLabel('暂无用量记录', [18, 140, W - 36, 22], 11, $.NSFontWeightRegular,
-      $.NSColor.secondaryLabelColor);
-    try { empty.setAlignment(2); } catch (e) {}
+    const empty = sLabel('暂无用量记录', [22, top(dailyHeaderTop + 34, 24), W - 44, 24], 12,
+      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2);
     root.addSubview(empty);
   } else {
     for (let i = 0; i < days.length; i++) {
       const d = days[i];
-      const y = 240 - i * 48;
-      const dateLabel = sLabel(dayLabel(d.key), [18, y + 26, 90, 15], 10.5,
+      const y = top(rowsTop + i * rowH, rowH);
+      const dateLabel = sLabel(dayLabel(d.key), [22, y + 28, 110, 18], 12,
         $.NSFontWeightMedium, T.text);
       root.addSubview(dateLabel);
       const totalLabel = sLabel(fmtCredits(d.credits) + ' 积分 · ' +
         (d.estimated ? '≈ ' : '') + fmtStatsTokens(d.tokens) + ' tok',
-        [110, y + 26, W - 128, 15], 9.5, $.NSFontWeightRegular, T.soft);
-      try { totalLabel.setAlignment(2); } catch (e) {}
+        [130, y + 28, W - 152, 18], 11, $.NSFontWeightRegular, T.soft, 2);
       root.addSubview(totalLabel);
-      const modelLabel = sLabel(statsDayModelsText(d), [18, y + 8, W - 36, 14], 8.8,
+      const modelLabel = sLabel(statsDayModelsText(d), [22, y + 8, W - 44, 16], 10,
         $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
       try { modelLabel.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
       root.addSubview(modelLabel);
-      root.addSubview(box([18, y, W - 36, 1], T.divider, 0, 0, null));
+      root.addSubview(box([22, y, W - 44, 1], T.divider, 0, 0, null));
     }
   }
 
-  if (!direct && totalPages > 1) {
-    root.addSubview(sButton('‹', [18, 14, 28, 24], 'statsPrevPage:', null));
-    root.addSubview(sButton('›', [W - 46, 14, 28, 24], 'statsNextPage:', null));
+  if (navVisible) {
+    root.addSubview(sButton('‹ 上一页', [22, 14, 92, 28], 'statsPrevPage:', null));
+    root.addSubview(sButton('下一页 ›', [W - 114, 14, 92, 28], 'statsNextPage:', null));
   }
 
   statsPanel.orderOut(null);
   placeStatsPanel();
 }
-
 function buildStatsChip() {
   if (statsChip) {
     statsChip.orderOut(null);
@@ -2874,7 +2887,9 @@ function buildStatsChip() {
   statsChip.setHidesOnDeactivate(false);
   statsChip.setIgnoresMouseEvents(true);
   const root = statsChip.contentView;
-  root.addSubview(box([0, 0, W, H], T.bg, 10, 1, T.border));
+  let chipBg = T.bg;
+  try { chipBg = T.bg.colorWithAlphaComponent(1); } catch (e) {}
+  root.addSubview(box([0, 0, W, H], chipBg, 10, 1, T.border));
   statsChipLabel = sLabel('用量统计', [0, 7, W, 14], 9.5, $.NSFontWeightMedium, T.soft);
   try { statsChipLabel.setAlignment(2); } catch (e) {}
   root.addSubview(statsChipLabel);
@@ -2888,8 +2903,9 @@ function placeStatsPanel() {
   const sw = Number(screen.frame.size.width);
   const sh = Number(screen.frame.size.height);
   const bottom = sh - (b.y + b.height);
-  const W = 540;
-  const H = 600;
+  const frame = statsPanel.frame;
+  const W = Number(frame.size.width);
+  const H = Number(frame.size.height);
   const saved = state.positions.stats;
   let x;
   let y;
@@ -2934,7 +2950,9 @@ function refreshStatsVisibility() {
   const showPanel = !state.statsHidden &&
     (state.statsPreview || (front && (state.statsMode !== 'hover' || state.statsHover)));
   if (showPanel) {
-    if (!statsPanel) buildStatsWindow();
+    if (!statsPanel) {
+      try { buildStatsWindow(); } catch (e) { logError('buildStatsWindow', e); return; }
+    }
     placeStatsPanel();
     if (!statsPanel.isVisible) statsPanel.orderFront(null);
   } else if (statsPanel && statsPanel.isVisible) {
@@ -2987,6 +3005,7 @@ function rebuildStatsWindow() {
 }
 
 function openStats() {
+  try {
   if (settingsPanel) settingsPanel.orderOut(null);
   state.statsHidden = false;
   state.statsSuppress = false;
@@ -2994,6 +3013,7 @@ function openStats() {
   if (state.statsMode === 'hover') state.statsHover = true;
   rebuildStatsWindow();
   buildMenu();
+  } catch (e) { logError('openStats', e); }
 }
 
 function closeStats() {
