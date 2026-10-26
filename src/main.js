@@ -23,6 +23,7 @@ const SESSIONS_ROOT = HOME + '/.qoder/logs/sessions';
 const LOCAL_STORAGE_DIR = HOME + '/Library/Application Support/com.qoder.app.stable/Local Storage/leveldb';
 const SETTINGS_DIR = HOME + '/Library/Application Support/QoderMeter';
 const SETTINGS_PATH = SETTINGS_DIR + '/settings.json';
+const STATS_CACHE_PATH = SETTINGS_DIR + '/stats-cache.json';
 const LOG_PATH = HOME + '/Library/Logs/QoderMeter.log';
 const OLD_LOGIN_PLIST = HOME + '/Library/LaunchAgents/com.qoder.meter.plist';
 const WATCH_PLIST = HOME + '/Library/LaunchAgents/com.qoder.meter.watch.plist';
@@ -37,6 +38,21 @@ let BAR_H_BOTTOM = 32;
 const CARD_W = 246;
 const CARD_H = 220;
 const POLL_SECONDS = 0.6;
+const STATS_PAGE_SIZE = 5;
+const STATS_CACHE_MS = 10 * 60 * 1000;
+
+const STATS_RANGES = [
+  { id: '7d', label: '7 天' },
+  { id: '30d', label: '近 30 天' },
+  { id: 'month', label: '本月' },
+  { id: 'year', label: '近一年' }
+];
+
+const STATS_MODES = [
+  { id: 'hover', label: '悬停显示' },
+  { id: 'direct', label: '直接显示' },
+  { id: 'paged', label: '分页显示' }
+];
 
 const FONT_SIZES = [
   { id: 'small', label: '小', scale: 0.9 },
@@ -192,6 +208,17 @@ const state = {
     requests: true, tools: true, latency: true, status: true, title: true
   },
   fontSize: 'normal',
+  statsMode: 'hover',
+  statsRange: '7d',
+  statsHidden: false,
+  statsPreview: false,
+  statsHover: false,
+  statsHoverAt: 0,
+  statsSuppress: false,
+  statsPage: 0,
+  statsCache: null,
+  statsData: null,
+  frontIsQoder: false,
   bottomAutoHide: true,
   bottomRevealed: false,
   bottomOutside: false,
@@ -288,6 +315,11 @@ let settingsFollow = null;
 let settingsPosPopup = null;
 let settingsFontPopup = null;
 let settingsFieldChecks = [];
+let statsPanel = null;
+let statsChip = null;
+let statsChipLabel = null;
+let statsDragStartMouse = null;
+let statsDragStartOrigin = null;
 let settingsThemePopup = null;
 let settingsBottomAutoHide = null;
 let settingsUpdateButton = null;
@@ -545,6 +577,16 @@ function loadSettings() {
           if (FONT_SIZES[i].id === obj.fontSize) state.fontSize = obj.fontSize;
         }
       }
+      if (obj.statsMode) {
+        for (let i = 0; i < STATS_MODES.length; i++) {
+          if (STATS_MODES[i].id === obj.statsMode) state.statsMode = obj.statsMode;
+        }
+      }
+      if (obj.statsRange) {
+        for (let i = 0; i < STATS_RANGES.length; i++) {
+          if (STATS_RANGES[i].id === obj.statsRange) state.statsRange = obj.statsRange;
+        }
+      }
     }
     const fm = $.NSFileManager.defaultManager;
     state.autoStart = !!fm.fileExistsAtPath(WATCH_PLIST);
@@ -566,6 +608,8 @@ function saveSettings() {
       widths: state.widths,
       display: state.display,
       fontSize: state.fontSize,
+      statsMode: state.statsMode,
+      statsRange: state.statsRange,
       bottomAutoHide: state.bottomAutoHide
     };
     const s = $.NSString.alloc.initWithString(JSON.stringify(obj, null, 2));
@@ -647,8 +691,179 @@ function readQoderWindowBounds() {
   }
 }
 
-function scanRouteFile(path) {
+/* ------------------------------------------------------------ daily stats */
+
+const STATS_JQ = [
+  'def txt: (.message.content // []) | map(if .type=="text" then (.text//"") elif .type=="thinking" then (.thinking//"") elif .type=="tool_use" then ((.input//{})|tostring) else "" end) | join("");',
+  'select(.type=="assistant" and (.message.usage.credits? != null)) |',
+  '[.timestamp, (.message.model//"unknown"), (.message.usage.credits//0),',
+  '(.message.usage.input_tokens//0), (.message.usage.cache_read_input_tokens//0),',
+  '(.message.usage.cache_creation_input_tokens//0), (.message.usage.output_tokens//0),',
+  '((.message.usage.request_id)//""), (txt|length), (txt|[scan("\\\\p{Han}")]|length)] | @tsv'
+].join(' ');
+
+function pad2(n) {
+  return n < 10 ? '0' + n : String(n);
+}
+
+function dateKey(d) {
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+function loadStatsCache() {
   try {
+    const text = readString(STATS_CACHE_PATH);
+    if (!text) return;
+    const obj = JSON.parse(text);
+    if (!obj || !obj.days || typeof obj.days !== 'object') return;
+    const at = Number(obj.at) || 0;
+    if (Date.now() - at > STATS_CACHE_MS) return;
+    state.statsCache = { at: at, days: obj.days, rows: Number(obj.rows) || 0 };
+  } catch (e) {}
+}
+
+function saveStatsCache(cache) {
+  try {
+    sh('/bin/mkdir -p ' + q(SETTINGS_DIR));
+    const obj = { at: cache.at, rows: cache.rows, days: cache.days };
+    const s = $.NSString.alloc.initWithString(JSON.stringify(obj));
+    s.writeToFileAtomicallyEncodingError(STATS_CACHE_PATH, true, $.NSUTF8StringEncoding, null);
+  } catch (e) {}
+}
+
+function collectDailyUsage(force) {
+  const now = Date.now();
+  if (!force && state.statsCache && now - state.statsCache.at < STATS_CACHE_MS) {
+    return state.statsCache;
+  }
+  const fileText = sh('/usr/bin/find ' + q(PROJECTS_ROOT) + ' -type f -name "*.jsonl" 2>/dev/null').trim();
+  const files = fileText ? fileText.split(/\r\n|\r|\n/).filter(Boolean) : [];
+  const days = {};
+  if (!files.length) {
+    state.statsCache = { at: now, days: days, rows: 0 };
+    return state.statsCache;
+  }
+  const cmd = '/usr/bin/jq -r ' + q(STATS_JQ) + ' ' + files.map(q).join(' ') + ' 2>/dev/null || true';
+  const out = sh(cmd);
+  const seen = {};
+  let rows = 0;
+  const lines = out ? out.split(/\r\n|\r|\n/) : [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    const cols = line.split('\t');
+    if (cols.length < 10) continue;
+    const ts = cols[0];
+    const model = cols[1] || 'unknown';
+    const rid = cols[7] || '';
+    if (rid) {
+      if (seen[rid]) continue;
+      seen[rid] = true;
+    }
+    const t = Date.parse(ts);
+    if (!isFinite(t)) continue;
+    const key = dateKey(new Date(t));
+    const credits = Number(cols[2]) || 0;
+    const exact = (Number(cols[3]) || 0) + (Number(cols[4]) || 0) +
+      (Number(cols[5]) || 0) + (Number(cols[6]) || 0);
+    const chars = Number(cols[8]) || 0;
+    const cjk = Number(cols[9]) || 0;
+    const estimated = exact > 0 ? 0 :
+      Math.round(cjk / 1.35 + Math.max(0, chars - cjk) / 3.8);
+    const tokens = exact > 0 ? exact : estimated;
+    if (!days[key]) {
+      days[key] = { credits: 0, tokens: 0, requests: 0, estimated: false, models: {} };
+    }
+    const day = days[key];
+    day.credits += credits;
+    day.tokens += tokens;
+    day.requests++;
+    if (estimated > 0) day.estimated = true;
+    if (!day.models[model]) {
+      day.models[model] = { credits: 0, tokens: 0, requests: 0, estimated: false };
+    }
+    const m = day.models[model];
+    m.credits += credits;
+    m.tokens += tokens;
+    m.requests++;
+    if (estimated > 0) m.estimated = true;
+    rows++;
+  }
+  log('STATS files=' + files.length + ' rows=' + rows + ' out=' + (out ? out.length : 0) + ' days=' + Object.keys(days).length);
+  state.statsCache = { at: now, days: days, rows: rows };
+  saveStatsCache(state.statsCache);
+  return state.statsCache;
+}
+
+function statsRangeStart(range) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (range === 'month') return new Date(today.getFullYear(), today.getMonth(), 1);
+  const start = new Date(today.getTime());
+  if (range === '30d') start.setDate(start.getDate() - 29);
+  else if (range === 'year') start.setDate(start.getDate() - 364);
+  else start.setDate(start.getDate() - 6);
+  return start;
+}
+
+function statsForRange(range) {
+  const cache = collectDailyUsage(false);
+  const now = new Date();
+  const todayKey = dateKey(now);
+  const startKey = dateKey(statsRangeStart(range));
+  const models = {};
+  const dayList = [];
+  let credits = 0;
+  let tokens = 0;
+  let requests = 0;
+  let estimated = false;
+  const keys = Object.keys(cache.days);
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (key < startKey || key > todayKey) continue;
+    const d = cache.days[key];
+    credits += d.credits;
+    tokens += d.tokens;
+    requests += d.requests;
+    if (d.estimated) estimated = true;
+    const modelRows = [];
+    const mnames = Object.keys(d.models);
+    for (let j = 0; j < mnames.length; j++) {
+      const name = mnames[j];
+      const m = d.models[name];
+      modelRows.push({ name: name, credits: m.credits, tokens: m.tokens, estimated: m.estimated });
+      if (!models[name]) models[name] = { name: name, credits: 0, tokens: 0, requests: 0, estimated: false };
+      models[name].credits += m.credits;
+      models[name].tokens += m.tokens;
+      models[name].requests += m.requests;
+      if (m.estimated) models[name].estimated = true;
+    }
+    modelRows.sort(function (a, b) { return b.credits - a.credits || b.tokens - a.tokens; });
+    dayList.push({ key: key, credits: d.credits, tokens: d.tokens, requests: d.requests,
+      estimated: d.estimated, models: modelRows });
+  }
+  dayList.sort(function (a, b) { return b.key.localeCompare(a.key); });
+  const modelList = Object.keys(models).map(function (k) { return models[k]; });
+  modelList.sort(function (a, b) { return b.credits - a.credits || b.tokens - a.tokens; });
+  return {
+    range: range, credits: credits, tokens: tokens, requests: requests,
+    estimated: estimated, activeDays: dayList.length,
+    days: dayList, models: modelList
+  };
+}
+
+function fmtStatsTokens(v) {
+  if (!v || v <= 0) return '0';
+  return fmtK(v);
+}
+
+function dayLabel(key) {
+  const today = dateKey(new Date());
+  if (key === today) return '今天';
+  return key.slice(5);
+}
+
+function scanRouteFile(path) {  try {
     const data = $.NSData.dataWithContentsOfFile(path);
     if (!data || data.isNil()) return null;
     const s = $.NSString.alloc.initWithDataEncoding(data, $.NSISOLatin1StringEncoding);
@@ -1561,6 +1776,50 @@ function dragEnd() {
   }
 }
 
+function statsDragBegin() {
+  try {
+    if (!statsPanel) return;
+    const m = $.NSEvent.mouseLocation;
+    statsDragStartMouse = { x: Number(m.x), y: Number(m.y) };
+    const f = statsPanel.frame.origin;
+    statsDragStartOrigin = { x: Number(f.x), y: Number(f.y) };
+  } catch (e) {}
+}
+
+function statsDragMove() {
+  try {
+    if (!statsPanel || !statsDragStartMouse || !statsDragStartOrigin) return;
+    const m = $.NSEvent.mouseLocation;
+    const screen = $.NSScreen.mainScreen;
+    const sw = Number(screen.frame.size.width);
+    const sh = Number(screen.frame.size.height);
+    const w = Number(statsPanel.frame.size.width);
+    const h = Number(statsPanel.frame.size.height);
+    let x = Math.round(statsDragStartOrigin.x + (Number(m.x) - statsDragStartMouse.x));
+    let y = Math.round(statsDragStartOrigin.y + (Number(m.y) - statsDragStartMouse.y));
+    x = Math.max(4, Math.min(x, sw - w - 4));
+    y = Math.max(4, Math.min(y, sh - h - 34));
+    statsPanel.setFrameOrigin($.NSMakePoint(x, y));
+  } catch (e) {}
+}
+
+function statsDragEnd() {
+  try {
+    if (!statsPanel || !state.windowBounds) return;
+    const b = state.windowBounds;
+    const sh = Number($.NSScreen.mainScreen.frame.size.height);
+    const bottom = sh - (b.y + b.height);
+    const f = statsPanel.frame.origin;
+    state.positions.stats = {
+      dx: Math.round(Number(f.x) - b.x),
+      dy: Math.round(Number(f.y) - bottom)
+    };
+    statsDragStartMouse = null;
+    statsDragStartOrigin = null;
+    saveSettings();
+  } catch (e) {}
+}
+
 function addGearButton(root, x, y, size, tint) {
   const pillSize = size + 6;
   root.addSubview(box([x, y, pillSize, pillSize], T.grayTint, pillSize / 2, 0, null));
@@ -1917,6 +2176,7 @@ function refreshVisibility() {
     }
   } catch (e) {}
   const frontIsQoder = bid === 'com.qoder.app';
+  state.frontIsQoder = frontIsQoder;
   if (frontIsQoder) state.lastQoderFrontAt = Date.now();
   const show = !state.panelHidden && state.qoderRunning && frontIsQoder;
   const topCollapsed = state.layout === 'top' && state.qoderFullscreen && !state.topRevealed;
@@ -2002,6 +2262,7 @@ function buildMenu() {
   menu.setAutoenablesItems(false);
 
   menu.addItem(menuItem('设置…', 'openSettings:', null, null));
+  menu.addItem(menuItem('用量统计…', 'openStats:', null, null));
   menu.addItem($.NSMenuItem.separatorItem);
 
   menu.addItem(menuItem(state.panelHidden ? '显示状态条' : '隐藏状态条', 'togglePanel:', null, null));
@@ -2060,6 +2321,16 @@ function buildMenu() {
   fontItem.setSubmenu(fontMenu);
   menu.addItem(fontItem);
 
+  const statsModeMenu = $.NSMenu.alloc.initWithTitle('统计显示');
+  statsModeMenu.setAutoenablesItems(false);
+  for (let i = 0; i < STATS_MODES.length; i++) {
+    statsModeMenu.addItem(menuItem(STATS_MODES[i].label, 'statsModeMenu:',
+      state.statsMode === STATS_MODES[i].id, STATS_MODES[i].id));
+  }
+  const statsModeItem = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('统计显示', '', '');
+  statsModeItem.setSubmenu(statsModeMenu);
+  menu.addItem(statsModeItem);
+
   const themeMenu = $.NSMenu.alloc.initWithTitle('外观');
   themeMenu.setAutoenablesItems(false);
   themeMenu.addItem(menuItem('自动（跟随 Qoder）', 'themeAuto:', state.theme === 'auto', null));
@@ -2088,6 +2359,7 @@ function menuSignature() {
   return parts.join('|') + '#' + (state.pinned || '') + '#' + state.sessionId + '#' +
     (state.panelHidden ? 1 : 0) + '#' + state.layout + '#' + state.theme + '#' +
     state.fontSize + '#' + JSON.stringify(state.display) + '#' +
+    state.statsMode + '#' + state.statsRange + '#' + (state.statsHidden ? 1 : 0) + '#' +
     (state.autoStart ? 1 : 0) + '#' + (state.closeWithQoder ? 1 : 0);
 }
 
@@ -2344,6 +2616,7 @@ function buildSettingsWindow() {
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
   root.addSubview(sButton('重置当前位置', [20, 36, 140, 28], 'resetPosition:', null));
+  root.addSubview(sButton('用量统计', [170, 36, 110, 28], 'openStats:', null));
   root.addSubview(sButton('完成', [300, 36, 100, 28], 'closeSettings:', '\r'));
   settingsPanel.center;
 }
@@ -2391,6 +2664,381 @@ function showSettings() {
   }
 }
 
+function fmtDateShort(d) {
+  return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+function statsRangeText(data) {
+  const start = statsRangeStart(state.statsRange);
+  return fmtDateShort(start) + ' ~ ' + fmtDateShort(new Date()) + ' · 活跃 ' + data.activeDays + ' 天';
+}
+
+function statsModelRows(data) {
+  if (data.models.length <= 4) return data.models.slice(0, 4);
+  const rows = data.models.slice(0, 3);
+  const other = { name: '其他 ' + (data.models.length - 3) + ' 个', credits: 0, tokens: 0, estimated: false };
+  for (let i = 3; i < data.models.length; i++) {
+    other.credits += data.models[i].credits;
+    other.tokens += data.models[i].tokens;
+    if (data.models[i].estimated) other.estimated = true;
+  }
+  rows.push(other);
+  return rows;
+}
+
+function statsDayModelsText(day) {
+  const parts = [];
+  const n = Math.min(2, day.models.length);
+  for (let i = 0; i < n; i++) {
+    const m = day.models[i];
+    parts.push(m.name + ' ' + fmtCredits(m.credits) + '分/' +
+      (m.estimated ? '≈' : '') + fmtStatsTokens(m.tokens));
+  }
+  if (day.models.length > n) parts.push('+' + (day.models.length - n));
+  return parts.join(' · ');
+}
+
+function statsCard(root, x, labelText, valueText, color) {
+  root.addSubview(box([x, 432, 160, 62], T.grayTint, 10, 0, null));
+  root.addSubview(sLabel(labelText, [x + 12, 478, 136, 14], 9.2, $.NSFontWeightRegular,
+    $.NSColor.secondaryLabelColor));
+  root.addSubview(sLabel(valueText, [x + 12, 446, 136, 27], 17, $.NSFontWeightSemibold, color));
+}
+
+function statsPick(root, title, x, w, tag, action, selected, tip) {
+  root.addSubview(box([x, 506, w, 26], selected ? T.greenTint : T.grayTint, 8, 0, null));
+  const b = sButton(title, [x, 506, w, 26], action, null);
+  try {
+    b.setBordered(false);
+    b.setFont($.NSFont.systemFontOfSizeWeight(10.2,
+      selected ? $.NSFontWeightSemibold : $.NSFontWeightRegular));
+    b.setTag(tag);
+    if (tip) b.setToolTip(tip);
+  } catch (e) {}
+  root.addSubview(b);
+}
+
+function buildStatsWindow() {
+  if (statsPanel) {
+    statsPanel.orderOut(null);
+    statsPanel = null;
+  }
+  const W = 540;
+  const H = 600;
+  statsPanel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+    $.NSMakeRect(0, 0, W, H), 128, $.NSBackingStoreBuffered, false);
+  statsPanel.setLevel(26);
+  statsPanel.setCollectionBehavior(1 | 256 | 16);
+  statsPanel.setOpaque(false);
+  statsPanel.setBackgroundColor($.NSColor.clearColor);
+  statsPanel.setHasShadow(true);
+  statsPanel.setHidesOnDeactivate(false);
+  statsPanel.setBecomesKeyOnlyIfNeeded(true);
+  const darkAppearance = state.resolvedSkin === 'graphite' || state.resolvedSkin === 'dusk';
+  const appearanceName = darkAppearance ? $.NSAppearanceNameDarkAqua : $.NSAppearanceNameAqua;
+  const statsAppearance = $.NSAppearance.appearanceNamed(appearanceName);
+  if (statsAppearance && !statsAppearance.isNil()) statsPanel.setAppearance(statsAppearance);
+
+  const root = statsPanel.contentView;
+  root.addSubview(box([0, 0, W, H], T.bg, 16, 1, T.border));
+  root.addSubview(box([20, H - 2, W - 40, 1], T.highlight, 0, 0, null));
+
+  const data = statsForRange(state.statsRange);
+  state.statsData = data;
+
+  root.addSubview(box([18, 558, 28, 28], T.greenTint, 8, 0, null));
+  const statsIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(24, 564, 16, 16));
+  const statsImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('chart.bar.xaxis',
+    '用量统计');
+  if (statsImage && !statsImage.isNil()) {
+    statsIcon.setImage(statsImage);
+    try { statsIcon.setContentTintColor(T.green); } catch (e) {}
+  }
+  root.addSubview(statsIcon);
+  root.addSubview(sLabel('用量统计', [54, 563, 240, 22], 15, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('本地日志 · 每日用量与单模型用量', [54, 544, 420, 14], 9.2,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+
+  const close = sButton('×', [500, 566, 24, 24], 'closeStats:', null);
+  try { close.setBordered(false); close.setFont($.NSFont.systemFontOfSize(15)); } catch (e) {}
+  root.addSubview(close);
+
+  statsDragView = $.StatsDragView.alloc.initWithFrame($.NSMakeRect(0, 544, W - 50, 56));
+  root.addSubview(statsDragView);
+
+  const shortRangeLabels = ['7天', '30天', '本月', '一年'];
+  for (let i = 0; i < STATS_RANGES.length; i++) {
+    statsPick(root, shortRangeLabels[i] || STATS_RANGES[i].label, 18 + i * 54, 48,
+      i, 'statsRangePick:', state.statsRange === STATS_RANGES[i].id, STATS_RANGES[i].label);
+  }
+  const shortModeLabels = ['悬停', '直接', '分页'];
+  for (let i = 0; i < STATS_MODES.length; i++) {
+    statsPick(root, shortModeLabels[i] || STATS_MODES[i].label, 244 + i * 61, 55,
+      i, 'statsModePick:', state.statsMode === STATS_MODES[i].id, STATS_MODES[i].label);
+  }
+  root.addSubview(sButton('刷新', [440, 506, 70, 26], 'statsRefresh:', null));
+
+  root.addSubview(sLabel(statsRangeText(data), [18, 486, 320, 14], 9,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+
+  statsCard(root, 18, '总积分', fmtCredits(data.credits), T.gold);
+  statsCard(root, 190, '总 Token', (data.estimated ? '≈ ' : '') + fmtStatsTokens(data.tokens), T.soft);
+  statsCard(root, 362, '请求数', fmtCount(data.requests), T.text);
+
+  root.addSubview(sLabel('按模型', [18, 404, 200, 16], 10, $.NSFontWeightSemibold));
+  root.addSubview(sLabel(statsModelRows(data).length ? '积分 / Token' : '',
+    [360, 404, 162, 16], 9, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+  const modelRows = statsModelRows(data);
+  if (!modelRows.length) {
+    root.addSubview(sLabel('暂无模型记录', [18, 374, 300, 16], 9.5, $.NSFontWeightRegular,
+      $.NSColor.secondaryLabelColor));
+  } else {
+    for (let i = 0; i < modelRows.length; i++) {
+      const m = modelRows[i];
+      const y = 382 - i * 22;
+      const nameLabel = sLabel(m.name, [18, y, 190, 16], 9.6, $.NSFontWeightMedium, T.text);
+      try { nameLabel.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+      root.addSubview(nameLabel);
+      const val = fmtCredits(m.credits) + ' · ' + (m.estimated ? '≈ ' : '') +
+        fmtStatsTokens(m.tokens) + ' tok';
+      const valueLabel = sLabel(val, [210, y, 312, 16], 9.2, $.NSFontWeightRegular, T.soft);
+      try { valueLabel.setAlignment(2); } catch (e) {}
+      root.addSubview(valueLabel);
+    }
+  }
+
+  const direct = state.statsMode === 'direct';
+  const pageSize = STATS_PAGE_SIZE;
+  const totalPages = Math.max(1, Math.ceil(data.days.length / pageSize));
+  state.statsPage = Math.max(0, Math.min(state.statsPage, totalPages - 1));
+  const page = direct ? 0 : state.statsPage;
+  const days = data.days.slice(page * pageSize, page * pageSize + pageSize);
+
+  root.addSubview(sLabel(direct ? '按天（最近 5 天）' : '按天', [18, 286, 200, 16], 10,
+    $.NSFontWeightSemibold));
+  if (!direct) {
+    const pageLabel = sLabel((page + 1) + ' / ' + totalPages, [392, 286, 130, 16], 9.2,
+      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
+    try { pageLabel.setAlignment(2); } catch (e) {}
+    root.addSubview(pageLabel);
+  }
+
+  if (!days.length) {
+    const empty = sLabel('暂无用量记录', [18, 140, W - 36, 22], 11, $.NSFontWeightRegular,
+      $.NSColor.secondaryLabelColor);
+    try { empty.setAlignment(2); } catch (e) {}
+    root.addSubview(empty);
+  } else {
+    for (let i = 0; i < days.length; i++) {
+      const d = days[i];
+      const y = 240 - i * 48;
+      const dateLabel = sLabel(dayLabel(d.key), [18, y + 26, 90, 15], 10.5,
+        $.NSFontWeightMedium, T.text);
+      root.addSubview(dateLabel);
+      const totalLabel = sLabel(fmtCredits(d.credits) + ' 积分 · ' +
+        (d.estimated ? '≈ ' : '') + fmtStatsTokens(d.tokens) + ' tok',
+        [110, y + 26, W - 128, 15], 9.5, $.NSFontWeightRegular, T.soft);
+      try { totalLabel.setAlignment(2); } catch (e) {}
+      root.addSubview(totalLabel);
+      const modelLabel = sLabel(statsDayModelsText(d), [18, y + 8, W - 36, 14], 8.8,
+        $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
+      try { modelLabel.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+      root.addSubview(modelLabel);
+      root.addSubview(box([18, y, W - 36, 1], T.divider, 0, 0, null));
+    }
+  }
+
+  if (!direct && totalPages > 1) {
+    root.addSubview(sButton('‹', [18, 14, 28, 24], 'statsPrevPage:', null));
+    root.addSubview(sButton('›', [W - 46, 14, 28, 24], 'statsNextPage:', null));
+  }
+
+  statsPanel.orderOut(null);
+  placeStatsPanel();
+}
+
+function buildStatsChip() {
+  if (statsChip) {
+    statsChip.orderOut(null);
+    statsChip = null;
+  }
+  const W = 150;
+  const H = 28;
+  statsChip = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+    $.NSMakeRect(0, 0, W, H), 128, $.NSBackingStoreBuffered, false);
+  statsChip.setLevel(4);
+  statsChip.setCollectionBehavior(1 | 256 | 16);
+  statsChip.setOpaque(false);
+  statsChip.setBackgroundColor($.NSColor.clearColor);
+  statsChip.setHasShadow(true);
+  statsChip.setHidesOnDeactivate(false);
+  statsChip.setIgnoresMouseEvents(true);
+  const root = statsChip.contentView;
+  root.addSubview(box([0, 0, W, H], T.bg, 10, 1, T.border));
+  statsChipLabel = sLabel('用量统计', [0, 7, W, 14], 9.5, $.NSFontWeightMedium, T.soft);
+  try { statsChipLabel.setAlignment(2); } catch (e) {}
+  root.addSubview(statsChipLabel);
+  statsChip.orderOut(null);
+}
+
+function placeStatsPanel() {
+  if (!statsPanel || !state.windowBounds) return;
+  const b = state.windowBounds;
+  const screen = $.NSScreen.mainScreen;
+  const sw = Number(screen.frame.size.width);
+  const sh = Number(screen.frame.size.height);
+  const bottom = sh - (b.y + b.height);
+  const W = 540;
+  const H = 600;
+  const saved = state.positions.stats;
+  let x;
+  let y;
+  if (saved && isFinite(saved.dx) && isFinite(saved.dy)) {
+    x = b.x + Number(saved.dx);
+    y = bottom + Number(saved.dy);
+  } else {
+    x = b.x + b.width + 12;
+    if (x + W > sw - 8) x = b.x - W - 12;
+    if (x < 8) x = Math.round((sw - W) / 2);
+    y = bottom + b.height - H - 50;
+  }
+  x = Math.max(8, Math.min(x, sw - W - 8));
+  y = Math.max(8, Math.min(y, sh - H - 34));
+  statsPanel.setFrameOrigin($.NSMakePoint(Math.round(x), Math.round(y)));
+}
+
+function placeStatsChip() {
+  if (!statsChip || !panel) return;
+  const pf = panel.frame;
+  const screen = $.NSScreen.mainScreen;
+  const sw = Number(screen.frame.size.width);
+  let x = Number(pf.origin.x) + Number(pf.size.width) - 150;
+  let y = Number(pf.origin.y) - 30;
+  if (y < 8) y = Number(pf.origin.y) + Number(pf.size.height) + 4;
+  x = Math.max(8, Math.min(x, sw - 158));
+  statsChip.setFrameOrigin($.NSMakePoint(Math.round(x), Math.round(y)));
+}
+
+function refreshStatsVisibility() {
+  const front = !!state.frontIsQoder;
+  const hoverMode = state.statsMode === 'hover';
+  const showChip = front && hoverMode && !state.statsHidden;
+  if (showChip) {
+    if (!statsChip) buildStatsChip();
+    placeStatsChip();
+    if (!statsChip.isVisible) statsChip.orderFront(null);
+  } else if (statsChip && statsChip.isVisible) {
+    statsChip.orderOut(null);
+  }
+
+  const showPanel = !state.statsHidden &&
+    (state.statsPreview || (front && (state.statsMode !== 'hover' || state.statsHover)));
+  if (showPanel) {
+    if (!statsPanel) buildStatsWindow();
+    placeStatsPanel();
+    if (!statsPanel.isVisible) statsPanel.orderFront(null);
+  } else if (statsPanel && statsPanel.isVisible) {
+    statsPanel.orderOut(null);
+  }
+}
+
+function updateStatsHover() {
+  if (state.statsMode !== 'hover') {
+    state.statsHover = false;
+    return;
+  }
+  try {
+    const m = $.NSEvent.mouseLocation;
+    let over = false;
+    if (statsChip && statsChip.isVisible) {
+      const f = statsChip.frame;
+      over = m.x >= Number(f.origin.x) - 8 && m.x <= Number(f.origin.x) + Number(f.size.width) + 8 &&
+        m.y >= Number(f.origin.y) - 8 && m.y <= Number(f.origin.y) + Number(f.size.height) + 8;
+    }
+    if (!over && statsPanel && statsPanel.isVisible) {
+      const f = statsPanel.frame;
+      over = m.x >= Number(f.origin.x) - 6 && m.x <= Number(f.origin.x) + Number(f.size.width) + 6 &&
+        m.y >= Number(f.origin.y) - 6 && m.y <= Number(f.origin.y) + Number(f.size.height) + 6;
+    }
+    if (state.statsSuppress) {
+      if (!over) state.statsSuppress = false;
+      state.statsHover = false;
+      return;
+    }
+    if (over) {
+      state.statsHover = true;
+      state.statsHoverAt = Date.now();
+    } else if (state.statsHover && Date.now() - state.statsHoverAt > 1200) {
+      state.statsHover = false;
+    }
+  } catch (e) {}
+}
+
+function rebuildStatsWindow() {
+  if (statsPanel) {
+    statsPanel.orderOut(null);
+    statsPanel = null;
+  }
+  if (statsChip) {
+    statsChip.orderOut(null);
+    statsChip = null;
+  }
+  refreshStatsVisibility();
+}
+
+function openStats() {
+  if (settingsPanel) settingsPanel.orderOut(null);
+  state.statsHidden = false;
+  state.statsSuppress = false;
+  state.statsPreview = true;
+  if (state.statsMode === 'hover') state.statsHover = true;
+  rebuildStatsWindow();
+  buildMenu();
+}
+
+function closeStats() {
+  if (state.statsMode === 'hover') {
+    state.statsHidden = false;
+    state.statsSuppress = true;
+  } else {
+    state.statsHidden = true;
+  }
+  state.statsPreview = false;
+  state.statsHover = false;
+  refreshStatsVisibility();
+}
+
+function setStatsMode(id) {
+  let valid = false;
+  for (let i = 0; i < STATS_MODES.length; i++) {
+    if (STATS_MODES[i].id === id) valid = true;
+  }
+  if (!valid) return;
+  state.statsMode = id;
+  state.statsHidden = false;
+  state.statsSuppress = false;
+  state.statsPreview = false;
+  state.statsHover = false;
+  state.statsPage = 0;
+  saveSettings();
+  rebuildStatsWindow();
+  buildMenu();
+}
+
+function setStatsRange(id) {
+  let valid = false;
+  for (let i = 0; i < STATS_RANGES.length; i++) {
+    if (STATS_RANGES[i].id === id) valid = true;
+  }
+  if (!valid) return;
+  state.statsRange = id;
+  state.statsSuppress = false;
+  state.statsPage = 0;
+  saveSettings();
+  rebuildStatsWindow();
+  buildMenu();
+}
+
 function rebuildPanelUI() {
   if (panel) panel.orderOut(null);
   buildUI(state.layout);
@@ -2399,6 +3047,8 @@ function rebuildPanelUI() {
   updateUI();
   updateSettingsControls();
   buildMenu();
+  if (statsPanel) rebuildStatsWindow();
+  else if (statsChip) buildStatsChip();
 }
 
 function setTheme(theme) {
@@ -2495,6 +3145,29 @@ ObjC.registerSubclass({
     'mouseUp:': {
       types: ['void', ['id']],
       implementation: function (event) { dragEnd(); }
+    }
+  }
+});
+
+ObjC.registerSubclass({
+  name: 'StatsDragView',
+  superclass: 'NSView',
+  methods: {
+    'acceptsFirstMouse:': {
+      types: ['bool', ['id']],
+      implementation: function (event) { return true; }
+    },
+    'mouseDown:': {
+      types: ['void', ['id']],
+      implementation: function (event) { statsDragBegin(); }
+    },
+    'mouseDragged:': {
+      types: ['void', ['id']],
+      implementation: function (event) { statsDragMove(); }
+    },
+    'mouseUp:': {
+      types: ['void', ['id']],
+      implementation: function (event) { statsDragEnd(); }
     }
   }
 });
@@ -2687,6 +3360,58 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function (sender) {
         toggleDisplayField(representedId(sender));
+      }
+    },
+    'openStats:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { openStats(); }
+    },
+    'closeStats:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { closeStats(); }
+    },
+    'statsRangePick:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const idx = Number(sender.tag);
+        setStatsRange((STATS_RANGES[idx] || STATS_RANGES[0]).id);
+      }
+    },
+    'statsModePick:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const idx = Number(sender.tag);
+        setStatsMode((STATS_MODES[idx] || STATS_MODES[0]).id);
+      }
+    },
+    'statsModeMenu:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setStatsMode(representedId(sender)); }
+    },
+    'statsPrevPage:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const data = state.statsData || statsForRange(state.statsRange);
+        const total = Math.max(1, Math.ceil(data.days.length / STATS_PAGE_SIZE));
+        state.statsPage = Math.max(0, Math.min(state.statsPage, total - 1) - 1);
+        rebuildStatsWindow();
+      }
+    },
+    'statsNextPage:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const data = state.statsData || statsForRange(state.statsRange);
+        const total = Math.max(1, Math.ceil(data.days.length / STATS_PAGE_SIZE));
+        state.statsPage = Math.min(total - 1, state.statsPage + 1);
+        rebuildStatsWindow();
+      }
+    },
+    'statsRefresh:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        collectDailyUsage(true);
+        state.statsData = null;
+        rebuildStatsWindow();
       }
     },
     'checkUpdates:': {
@@ -3004,8 +3729,10 @@ function tick() {
     updateUI();
     updateBottomHover();
     updateTopHover();
+    updateStatsHover();
     applyWindowLayout();
     refreshVisibility();
+    refreshStatsVisibility();
   } catch (e) {
     logError('tick', e);
   }
@@ -3019,6 +3746,7 @@ function main() {
 
   loadSettings();
   applyFontScale();
+  loadStatsCache();
 
   try {
     const fm = $.NSFileManager.defaultManager;
