@@ -20,7 +20,7 @@ Qoder Meter 是一个轻量的 macOS 菜单栏/浮窗工具，用只读方式读
     </td>
     <td align="center" width="50%">
       <img src="docs/screenshots/settings.png" width="330" alt="设置窗口"><br>
-      <sub>独立设置窗口（皮肤、字号、显示内容与版本检查）</sub>
+      <sub>独立设置窗口（皮肤、字号、Token 单位、显示内容与版本检查）</sub>
     </td>
   </tr>
 </table>
@@ -42,7 +42,7 @@ Qoder Meter 是一个轻量的 macOS 菜单栏/浮窗工具，用只读方式读
 
 <p align="center">
   <img src="docs/screenshots/stats.png" width="420" alt="用量统计面板"><br>
-  <sub>用量统计：齿轮旁的统计图标向下展开；7 天 / 近 30 天 / 本月 / 近一年，按天和按模型汇总</sub>
+  <sub>用量统计：齿轮旁的统计图标向下展开；紧凑排版与分页，按天和按模型汇总</sub>
 </p>
 
 > 截图中的会话名称和数值为演示数据，不包含真实用户会话。
