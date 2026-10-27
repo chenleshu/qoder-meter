@@ -1,0 +1,4 @@
+probe/*.png
+probe/*-out.txt
+*.log
+.build/
