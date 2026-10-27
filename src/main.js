@@ -84,6 +84,11 @@ const FONT_SIZES = [
   { id: 'xlarge', label: '特大', scale: 1.32 }
 ];
 
+const TOKEN_UNITS = [
+  { id: 'latin', label: 'b / m / k', sample: '≈ 888.8m' },
+  { id: 'cn', label: '亿 / 万', sample: '≈ 8888.8万' }
+];
+
 const DISPLAY_FIELDS = [
   { id: 'tps', label: 'TPS' },
   { id: 'turn', label: '本轮' },
@@ -231,6 +236,7 @@ const state = {
     requests: true, tools: true, latency: true, status: true, title: true
   },
   fontSize: 'normal',
+  tokenUnit: 'latin',
   statsMode: 'hover',
   statsRange: '7d',
   statsHidden: false,
@@ -340,6 +346,7 @@ let settingsClose = null;
 let settingsFollow = null;
 let settingsPosPopup = null;
 let settingsFontPopup = null;
+let settingsTokenUnitPopup = null;
 let settingsFieldChecks = [];
 let statsPanel = null;
 let statsPillBox = null;
@@ -425,11 +432,24 @@ function readBlock(path, offset) {
   }
 }
 
-function fmtK(n) {
+function fmtToken(n) {
   if (!n || n <= 0) return '—';
+  if (state.tokenUnit === 'cn') {
+    if (n >= 100000000) return (n / 100000000).toFixed(2) + '亿';
+    if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+    return String(Math.round(n));
+  }
+  if (n >= 1000000000) return (n / 1000000000).toFixed(2) + 'b';
   if (n >= 1000000) return (n / 1000000).toFixed(2) + 'm';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
   return String(Math.round(n));
+}
+
+function tokenUnitSample() {
+  for (let i = 0; i < TOKEN_UNITS.length; i++) {
+    if (TOKEN_UNITS[i].id === state.tokenUnit) return TOKEN_UNITS[i].sample;
+  }
+  return TOKEN_UNITS[0].sample;
 }
 
 function fmtCount(n) {
@@ -605,6 +625,11 @@ function loadSettings() {
           if (FONT_SIZES[i].id === obj.fontSize) state.fontSize = obj.fontSize;
         }
       }
+      if (obj.tokenUnit) {
+        for (let i = 0; i < TOKEN_UNITS.length; i++) {
+          if (TOKEN_UNITS[i].id === obj.tokenUnit) state.tokenUnit = obj.tokenUnit;
+        }
+      }
       if (obj.statsMode) {
         for (let i = 0; i < STATS_MODES.length; i++) {
           if (STATS_MODES[i].id === obj.statsMode) state.statsMode = obj.statsMode;
@@ -636,6 +661,7 @@ function saveSettings() {
       widths: state.widths,
       display: state.display,
       fontSize: state.fontSize,
+      tokenUnit: state.tokenUnit,
       statsMode: state.statsMode,
       statsRange: state.statsRange,
       bottomAutoHide: state.bottomAutoHide
@@ -949,7 +975,7 @@ function statsForRange(range) {
 
 function fmtStatsTokens(v) {
   if (!v || v <= 0) return '0';
-  return fmtK(v);
+  return fmtToken(v);
 }
 
 function dayLabel(key) {
@@ -1587,7 +1613,7 @@ function metricSampleWidth(mode, regFont, medFont) {
   };
   if (state.display.turn) { sep(); add('本轮 ', regFont); add('88m 88s', medFont); }
   if (state.display.age) { sep(); add('总计 ', regFont); add('888h 88m', medFont); }
-  if (state.display.token) { sep(); add('Token ', regFont); add('≈ 888.8k', medFont); }
+  if (state.display.token) { sep(); add('Token ', regFont); add(tokenUnitSample(), medFont); }
   if (state.display.credits) { sep(); add('积分 ', regFont); add('888.88', medFont); }
   if (state.display.requests) { sep(); add('8888 请求', regFont); }
   if (state.display.tools) { sep(); add('工具 8.8k', regFont); }
@@ -2043,8 +2069,8 @@ function updateUI() {
   const tpsText = fmtTps(state.tps);
   const turnText = state.turnWall ? fmtDuration(state.turnWall) : '—';
   const ageText = state.sessionAge ? fmtDuration(state.sessionAge) : '—';
-  const outText = state.exactOut > 0 ? fmtK(state.exactOut)
-    : (state.estOut > 0 ? '≈ ' + fmtK(state.estOut) : '—');
+  const outText = state.exactOut > 0 ? fmtToken(state.exactOut)
+    : (state.estOut > 0 ? '≈ ' + fmtToken(state.estOut) : '—');
   const latencyText = state.lastLatency ? fmtElapsed(state.lastLatency) : '—';
 
   if (titleLabel) {
@@ -2101,9 +2127,9 @@ function updateUI() {
     '本轮时长：' + turnText + '\n' +
     '会话总时长：' + ageText + '（自会话创建）\n' +
     '本轮模型耗时：' + fmtDuration(state.turnDuration) + '\n' +
-    '本轮输出：' + (state.turnTokens ? '≈ ' + fmtK(state.turnTokens) + ' tok' : '—') + '\n' +
-    '会话输出：' + (state.exactOut > 0 ? fmtK(state.exactOut) : '≈ ' + fmtK(state.estOut)) + ' tok\n' +
-    (state.inputTokens > 0 ? '输入 Token：' + fmtK(state.inputTokens) + '\n' : '') +
+    '本轮输出：' + (state.turnTokens ? '≈ ' + fmtToken(state.turnTokens) + ' tok' : '—') + '\n' +
+    '会话输出：' + (state.exactOut > 0 ? fmtToken(state.exactOut) : '≈ ' + fmtToken(state.estOut)) + ' tok\n' +
+    (state.inputTokens > 0 ? '输入 Token：' + fmtToken(state.inputTokens) + '\n' : '') +
     '已用积分：' + fmtCredits(state.credits) + '\n' +
     '请求数：' + requestCount + '（本轮 ' + state.turnRequestCount + '）\n' +
     '工具调用：' + toolCount + '\n' +
@@ -2412,6 +2438,16 @@ function buildMenu() {
   fontItem.setSubmenu(fontMenu);
   menu.addItem(fontItem);
 
+  const tokenUnitMenu = $.NSMenu.alloc.initWithTitle('Token 单位');
+  tokenUnitMenu.setAutoenablesItems(false);
+  for (let i = 0; i < TOKEN_UNITS.length; i++) {
+    tokenUnitMenu.addItem(menuItem(TOKEN_UNITS[i].label, 'tokenUnitMenu:',
+      state.tokenUnit === TOKEN_UNITS[i].id, TOKEN_UNITS[i].id));
+  }
+  const tokenUnitItem = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('Token 单位', '', '');
+  tokenUnitItem.setSubmenu(tokenUnitMenu);
+  menu.addItem(tokenUnitItem);
+
   const statsModeMenu = $.NSMenu.alloc.initWithTitle('统计显示');
   statsModeMenu.setAutoenablesItems(false);
   for (let i = 0; i < STATS_MODES.length; i++) {
@@ -2449,7 +2485,7 @@ function menuSignature() {
   const parts = state.recent.map(function (r) { return r.session_id + ':' + (r.title || ''); });
   return parts.join('|') + '#' + (state.pinned || '') + '#' + state.sessionId + '#' +
     (state.panelHidden ? 1 : 0) + '#' + state.layout + '#' + state.theme + '#' +
-    state.fontSize + '#' + JSON.stringify(state.display) + '#' +
+    state.fontSize + '#' + state.tokenUnit + '#' + JSON.stringify(state.display) + '#' +
     state.statsMode + '#' + state.statsRange + '#' + (state.statsHidden ? 1 : 0) + '#' +
     (state.autoStart ? 1 : 0) + '#' + (state.closeWithQoder ? 1 : 0);
 }
@@ -2685,7 +2721,19 @@ function buildSettingsWindow() {
   root.addSubview(settingsBottomAutoHide);
   root.addSubview(sSeparator(314));
 
-  root.addSubview(sLabel('显示内容', [22, 284, 400, 18], 12.5, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('显示内容', [22, 284, 180, 18], 12.5, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('Token 单位', [262, 284, 76, 18], 11.5,
+    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+  let tokenUnitIndex = 0;
+  const tokenUnitLabels = [];
+  for (let i = 0; i < TOKEN_UNITS.length; i++) {
+    tokenUnitLabels.push(TOKEN_UNITS[i].label);
+    if (TOKEN_UNITS[i].id === state.tokenUnit) tokenUnitIndex = i;
+  }
+  settingsTokenUnitPopup = sPopup(tokenUnitLabels, tokenUnitIndex,
+    [340, 278, 98, 28], 'settingsTokenUnitChanged:');
+  try { settingsTokenUnitPopup.setToolTip('状态条和用量统计中的 Token 缩写单位'); } catch (e) {}
+  root.addSubview(settingsTokenUnitPopup);
   settingsFieldChecks = [];
   for (let i = 0; i < DISPLAY_FIELDS.length; i++) {
     const field = DISPLAY_FIELDS[i];
@@ -2730,6 +2778,13 @@ function updateSettingsControls() {
     }
     for (let i = 0; i < settingsFieldChecks.length && i < DISPLAY_FIELDS.length; i++) {
       settingsFieldChecks[i].setState(state.display[DISPLAY_FIELDS[i].id] ? 1 : 0);
+    }
+    if (settingsTokenUnitPopup) {
+      let tokenUnitIndex = 0;
+      for (let i = 0; i < TOKEN_UNITS.length; i++) {
+        if (TOKEN_UNITS[i].id === state.tokenUnit) tokenUnitIndex = i;
+      }
+      settingsTokenUnitPopup.selectItemAtIndex(tokenUnitIndex);
     }
     settingsThemePopup.selectItemAtIndex(Math.max(0, SKIN_IDS.indexOf(state.theme)));
     const dark = state.resolvedSkin === 'graphite' || state.resolvedSkin === 'dusk';
@@ -3284,6 +3339,21 @@ function setFontSize(id) {
   rebuildPanelUI();
 }
 
+function setTokenUnit(id) {
+  let valid = false;
+  for (let i = 0; i < TOKEN_UNITS.length; i++) {
+    if (TOKEN_UNITS[i].id === id) valid = true;
+  }
+  if (!valid || id === state.tokenUnit) {
+    updateSettingsControls();
+    buildMenu();
+    return;
+  }
+  state.tokenUnit = id;
+  saveSettings();
+  rebuildPanelUI();
+}
+
 function toggleDisplayField(id) {
   if (typeof state.display[id] !== 'boolean') return;
   state.display[id] = !state.display[id];
@@ -3519,6 +3589,14 @@ ObjC.registerSubclass({
         setFontSize(font.id);
       }
     },
+    'settingsTokenUnitChanged:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const idx = Number(settingsTokenUnitPopup.indexOfSelectedItem);
+        const unit = TOKEN_UNITS[idx] || TOKEN_UNITS[0];
+        setTokenUnit(unit.id);
+      }
+    },
     'settingsToggleField:': {
       types: ['void', ['id']],
       implementation: function (sender) {
@@ -3531,6 +3609,12 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function (sender) {
         setFontSize(representedId(sender));
+      }
+    },
+    'tokenUnitMenu:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        setTokenUnit(representedId(sender));
       }
     },
     'toggleDisplay:': {
