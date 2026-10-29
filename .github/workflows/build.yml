@@ -7,8 +7,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  macos:
     runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: macos
     steps:
       - uses: actions/checkout@v4
 
@@ -25,6 +28,18 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: QoderMeter
-          path: QoderMeter.app
+          name: QoderMeter-macos
+          path: macos/QoderMeter.app
           if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse check
+        shell: powershell
+        run: ./tools/parse-check.ps1
