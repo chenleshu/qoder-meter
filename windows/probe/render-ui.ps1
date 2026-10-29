@@ -1,5 +1,5 @@
 ﻿# Render the real WPF controls without opening windows or touching user configuration.
-param([string]$OutputDirectory=(Join-Path (Split-Path $PSScriptRoot -Parent) '.build'))
+param([string]$OutputDirectory=(Join-Path (Split-Path $PSScriptRoot -Parent) '.build'),[switch]$StableWidthOnly)
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 foreach($name in @('lib-interop','lib-data','lib-account','lib-ui','lib-config-layout','lib-settings')){. (Join-Path $root ('src\'+$name+'.ps1'))}
@@ -32,13 +32,35 @@ $script:QM_S.recent=@([pscustomobject]@{session_id=$script:QM_S.sessionId;title=
 $script:QM_S.tps=132.6;$script:QM_S.tpsHistory=@(30,40,50,80,50,60,70,95,100,80,110,120,128,132)
 $script:QM_S.estOut=207900;$script:QM_S.credits=41.87;$script:QM_S.requestCount=14;$script:QM_S.toolCount=13;$script:QM_S.turnWall=64;$script:QM_S.turnDuration=12.5;$script:QM_S.sessionStartedAt=(QmNowMs)-27180000;$script:QM_S.lastLatency=12
 try{
+ if($StableWidthOnly){
+  foreach($skin in @('paper','graphite')){
+   $script:CFG.layout='title';$script:UI=@{skin=$skin;border=$null}
+   $view=Build-QmBar $script:CFG $skin 1;$view.UseLayoutRounding=$true
+   $script:UI.border=$view;$view.ToolTip=[Windows.Controls.ToolTip]::new();$expected=$null
+   foreach($state in @('short','normal','long')){
+    Update-QmView
+    if($state -eq 'short'){
+     $script:UI_TPS.Text='—';foreach($text in $script:UI_SEGS.Values){$text.Text='—'}
+     $script:UI_STATUS.Text='空闲';$script:UI_CREDIT.Text='未登录'
+    }elseif($state -eq 'long'){
+     $script:UI_TPS.Text='999999';foreach($text in $script:UI_SEGS.Values){$text.Text='999999999.99'}
+     $script:UI_STATUS.Text='生成中 999h 59m';$script:UI_CREDIT.Text='余 999,999,999 · 今 +999,999,999'
+    }
+    Set-QmBarWidth 689
+    if($null -eq $expected){$expected=$view.Width}elseif($view.Width -ne $expected){throw 'Live content changed the rendered bar width.'}
+    Save-View $view $view.Width $view.Height ('stable-width-'+$skin+'-'+$state)
+   }
+   Write-Output ($skin+' fixed rendered width: '+$expected+' DIP')
+  }
+  return
+ }
  foreach($skin in @('paper','graphite')){
   foreach($layout in @('title','toolbar','bottom','sidebar')){
    $script:CFG.layout=$layout;$script:UI=@{skin=$skin;border=$null}
    if($layout -eq 'sidebar'){$view=Build-QmCard $script:CFG $skin 1;$width=246;$height=250}
    else{$view=Build-QmBar $script:CFG $skin 1;$width=if($layout -eq 'title'){689}else{480};$height=30;$view.Height=$height}
    $script:UI.border=$view;$view.ToolTip=[Windows.Controls.ToolTip]::new();Update-QmView
-   if($layout -ne 'sidebar'){Set-QmBarWidth $width}
+   if($layout -ne 'sidebar'){Set-QmBarWidth $width;$width=$view.Width}
    Save-View $view $width $height ($layout+'-'+$skin)
   }
   $script:CFG.skin=$skin;$script:UI=@{skin=$skin;settings=$null};$window=New-QmSettingsWindow;$script:UI.settings=$window;Sync-QmSettings

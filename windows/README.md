@@ -8,8 +8,10 @@ Windows PowerShell 5.1 + WPF 编写的 Qoder Desktop 伴生状态条。无需 No
 2. 分隔线属于其右侧字段，字段关闭或因空间不足隐藏时会一起移除；所有字段关闭时不残留分隔线，设置按钮后不出现尾线。
 3. 账户功能内置到 `lib-account.ps1`，正常状态显示剩余积分与本机今日领取；无需外部领取脚本。
 4. 补充空活动列表缓存、领取失败冷却的回归，整理功能说明与离线截图。
+5. Windows 右键与托盘菜单改为图文分组：系统线性图标、停靠位置示意图、主题色块和账户摘要，深浅配色随皮肤切换；字段开关进一步分成速度与时间、用量与账户、会话与活动三组。
+6. 条形宽度按字号与字段开关预留固定容量，不再随数字位数、会话标题、生成状态或账户文案伸缩；仅空间、布局、字号、字段或 DPI 改变时重算，超长内容在自身槽位省略。
 
-应用内版本号仍为 `1.4.0-win.3`；本次是 `restructure` 分支的源码更新，未单独生成新的 Release 安装包。
+应用内版本号仍为 `1.4.0-win.3`；当前为源码更新，未单独生成新的 Release 安装包。
 
 ## 界面预览
 
@@ -23,6 +25,14 @@ Windows PowerShell 5.1 + WPF 编写的 Qoder Desktop 伴生状态条。无需 No
 
 ![会话工具栏紧凑状态条](docs/screenshots/toolbar-graphite.png)
 
+### 稳定宽度：短内容 → 超长内容
+
+![短内容下的固定容量状态条](docs/screenshots/stable-width-short.png)
+
+![超长内容下外框与列位置不变](docs/screenshots/stable-width-long.png)
+
+两图使用同一主题、同一字段配置和 689 DIP 可用空间，外宽均为 631 DIP；短值、空值和超长数字只替换槽位内文字，超长值在自身槽位省略，相邻字段不移动。完整内容仍保留在悬停提示中。
+
 ### 完整卡片与账户设置
 
 <table>
@@ -32,7 +42,27 @@ Windows PowerShell 5.1 + WPF 编写的 Qoder Desktop 伴生状态条。无需 No
   </tr>
 </table>
 
-截图由当前源码的真实 WPF 控件在离线夹具中以 2× 渲染。会话名称、余额、有效期和领取数均为示例，不代表真实账户；截图也不证明实际停靠、多屏和网络请求已经通过实测。完整统计卡片保持既有网格排版，不增加条形字段分隔线。
+以上截图由当前源码的真实 WPF 控件在离线夹具中以 2× 渲染。会话名称、余额、有效期和领取数均为示例，不代表真实账户；截图也不证明实际停靠、多屏和网络请求已经通过实测。完整统计卡片保持既有网格排版，不增加条形字段分隔线。
+
+### 图文菜单：深色 / 浅色
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/menu-graphite.png" width="305" alt="石墨主题图文菜单"><br>石墨主题</td>
+    <td align="center"><img src="docs/screenshots/menu-paper.png" width="305" alt="纸白主题图文菜单"><br>纸白主题</td>
+  </tr>
+</table>
+
+### Windows 专用细分
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/menu-fields-graphite.png" width="305" alt="十二个字段按三组分类"><br>字段分类与独立勾选</td>
+    <td align="center"><img src="docs/screenshots/menu-layout-graphite.png" width="305" alt="四种 Windows 停靠位置示意图"><br>停靠位置示意图<br><br><img src="docs/screenshots/menu-account-graphite.png" width="305" alt="账户余额和待领权益摘要"><br>账户摘要与领取操作</td>
+  </tr>
+</table>
+
+菜单图片使用真实 WinForms 控件的隐藏 `DrawToBitmap` 离线渲染，展示 1× / 96 DPI 布局与模拟数据；不包含系统弹出阴影，也不代表真实弹出定位、焦点、键盘操作和跨显示器 DPI 切换已经验收。
 
 ## 安装与启动
 
@@ -65,10 +95,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutoStart -St
 
 - 条形布局横向拖动微调，卡片顶部自由拖动。每个位置独立记忆偏移，“重置当前位置”只影响当前视图。
 - 五套配色：纸白、石墨、海盐、暮色、暖砂；另有自动外观。条形视图支持四档字号和逐字段开关，卡片不受这些开关和字号影响。
-- 窄空间按优先级保留余额、Token 等指标，隐藏字段仍可在悬停提示中查看。空间严重不足时收成细线，悬停展开，移出约 1.5 秒收起。
+- 条形视图按字号和字段开关预留稳定宽度，不再随数字位数、会话标题、生成状态或账户文案忽长忽短；超长内容省略显示，完整内容仍保留在悬停提示中。仅窗口可用空间、布局、字号、字段开关或 DPI 改变时重新适配。
+- 窄空间按优先级保留余额、Token 等指标：先收起状态胶囊，必要时由余额字段替代较宽的账户摘要；隐藏内容仍可在悬停提示中查看。空间严重不足时收成细线，悬停展开，移出约 1.5 秒收起。
 - 点击齿轮或左键点击托盘进入设置；右键状态条 / 托盘打开菜单。设置即时保存。
 - 自动跟随当前打开的会话，也可从最近会话中选择并固定；支持刷新、显示 / 隐藏和位置重置。
 - Qoder 非前台或最小化时隐藏；可随 Qoder 退出。手动退出仅抑制当前 Qoder 进程生命周期内的自动拉起。
+
+### 图文弹出菜单
+
+右键状态条与托盘使用同一套原生 Windows 菜单，保留方向键导航、子菜单、禁用状态与勾选反馈，不用网页替代菜单。
+
+| 分组 | 内容 |
+| --- | --- |
+| 快捷与会话 | 设置、显示 / 隐藏、自动跟随、选择并固定会话；长标题可悬停查看 |
+| 外观与布局 | 四种 Windows 停靠位置示意图、字号、主题色块、分类字段开关 |
+| 账户与应用 | 余额和今日领取摘要、领取与历史、启动行为、更多操作和退出 |
+
+「显示内容」细分为 **速度与时间**（TPS、本轮、总计、延迟）、**用量与账户**（Token、消耗、余额、账户积分）、**会话与活动**（请求、工具、状态、标题）。卡片模式下提示字段开关只影响条形布局。
+
+「随 Qoder 自动启动」「Qoder 退出时关闭」移入「启动与退出行为」；「立即刷新」「重置当前位置」「打开设置目录」集中在「更多操作」。账户摘要只展示当前缓存，打开菜单本身不会触发领取。
 
 ## 账户积分与权益
 
@@ -130,21 +175,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\parse-check.ps1
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\ui-regression.ps1 -Full
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\settings-regression.ps1
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\interaction-regression.ps1
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\menu-regression.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File probe\account-regression.ps1
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\data-regression.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File probe\lifecycle-test.ps1
 ```
 
-`data-regression` 的 JSON 序列化对照需要 Node；这是开发测试依赖，不是应用运行依赖。`ui-regression -Full` 覆盖分隔线归属、字段开关、五套主题、四档字号和窄—宽—窄布局稳定性。
+`data-regression` 的 JSON 序列化对照需要 Node；这是开发测试依赖，不是应用运行依赖。`ui-regression -Full` 覆盖分隔线归属、字段开关、五套主题、四档字号和窄—宽—窄布局稳定性，并检查短—长—短内容切换时外框、列位置与字段显隐不变，以及 100% / 125% / 150% / 200% 模拟 DPI 下的布局取整与边界。模拟 DPI 不等于真实多屏停靠验收。
+
+`menu-regression` 使用内存账户与会话夹具，覆盖菜单分组、原操作分发、字段开关、长标题、账户状态、五套主题与六种比例的几何边界，以及图标和勾选的独立绘制；不会启动主程序或访问真实账户。
 
 重新生成截图（从 `windows` 目录执行）：
 
 ```powershell
 New-Item -ItemType Directory -Force docs\screenshots | Out-Null
 powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\render-ui.ps1 -OutputDirectory docs\screenshots
+powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\render-menu.ps1 -OutputDirectory docs\screenshots
 ```
 
-渲染脚本使用真实控件与示例数据，不打开正常主窗口、不读取真实账号、不触发网络请求。PowerShell 脚本须保留 **UTF-8 BOM**，以兼容 Windows PowerShell 5.1。
+渲染脚本使用真实控件与示例数据，不打开正常主窗口、不读取真实账号、不触发网络请求。`render-menu` 输出深浅两种主题的主菜单、停靠位置、字段分类及账户子菜单共八张 PNG。为 `render-ui` 添加 `-StableWidthOnly` 可单独渲染短、正常和超长内容的等宽对照图。PowerShell 脚本须保留 **UTF-8 BOM**，以兼容 Windows PowerShell 5.1。
 
 ## 已知边界
 
@@ -158,6 +207,6 @@ powershell -NoProfile -STA -ExecutionPolicy Bypass -File probe\render-ui.ps1 -Ou
 
 ## 文件组织
 
-`src/meter.ps1` 为主入口；`lib-ui` 构建视图；`lib-settings` 管理设置；`lib-config-layout` 管理配置与几何；`lib-data` 解析本地数据；`lib-account` 管理账号接口和领取；`lib-lifecycle`、`watch`、`stop` 管理生命周期；`lib-interop` 封装系统 DLL。
+`src/meter.ps1` 为主入口；`lib-ui` 构建视图；`lib-menu` 绘制原生图文菜单；`lib-settings` 管理设置；`lib-config-layout` 管理配置与几何；`lib-data` 解析本地数据；`lib-account` 管理账号接口和领取；`lib-lifecycle`、`watch`、`stop` 管理生命周期；`lib-interop` 封装系统 DLL。
 
 [MIT License](../LICENSE)。

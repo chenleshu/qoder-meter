@@ -174,40 +174,81 @@ function Invoke-QmCommand([string]$command,$value){
   Update-QmView;Update-QmPlacement;Sync-QmSettings
  }catch{Write-QmLog ('command '+$command+': '+$_.Exception.Message+' '+$_.ScriptStackTrace);Show-QmBalloon '操作未完成' $_.Exception.Message}
 }
-function Add-QmMenu($parent,$text,$command,$value,$checked=$false){
- $mi=[Windows.Forms.ToolStripMenuItem]::new($text);$mi.Checked=$checked;$mi.Tag=@{Command=$command;Value=$value}
+function Add-QmMenu($parent,$text,$command,$value,$checked=$false,[string]$icon='', [string]$detail='', [string]$tone=''){
+ if($parent -is [Windows.Forms.ContextMenuStrip]){$menu=$parent}else{
+  $menu=$parent.DropDown
+  $menu.Renderer=$parent.Owner.Renderer;$menu.Font=$parent.Owner.Font;$menu.BackColor=$parent.Owner.BackColor;$menu.ForeColor=$parent.Owner.ForeColor
+  $menu.ShowImageMargin=$false;$menu.ShowCheckMargin=$false;$menu.Padding=[Windows.Forms.Padding]::new(5);$menu.Tag=$parent.Owner.Tag
+ }
+ $mi=[QoderMeter.MenuEntry]::new($text);$mi.Checked=$checked;$mi.Tag=@{Command=$command;Value=$value};$mi.UiScale=$menu.Tag.Scale
+ Set-QmMenuEntryStyle $mi $icon $detail $tone
  if($command){$mi.Add_Click({param($sender,$eventArgs) Invoke-QmCommand $sender.Tag.Command $sender.Tag.Value})}
- if($parent -is [Windows.Forms.ContextMenuStrip]){[void]$parent.Items.Add($mi)}else{[void]$parent.DropDownItems.Add($mi)};return $mi
+ [void]$menu.Items.Add($mi)
+ # ToolStripDropDownMenu otherwise computes its width from stock text margins,
+ # ignoring the custom icon, check and arrow columns drawn by our renderer.
+ $width=$mi.GetPreferredSize([Drawing.Size]::Empty).Width+$menu.Padding.Horizontal+2
+ $menu.MinimumSize=[Drawing.Size]::new([math]::Max($menu.MinimumSize.Width,$width),0)
+ return $mi
 }
-function New-QmTrayMenu {
- $m=[Windows.Forms.ContextMenuStrip]::new()
- [void](Add-QmMenu $m '设置…' 'settings' $null)
- [void](Add-QmMenu $m $(if($script:CFG.panelHidden){'显示状态条'}else{'隐藏状态条'}) 'toggleHidden' $null)
- [void](Add-QmMenu $m '自动跟随当前打开的会话' 'set' @{Key='follow';Value=[bool]$script:CFG.pinned} (!$script:CFG.pinned))
- $sessions=Add-QmMenu $m '选择并固定会话' '' $null
- foreach($r in $script:QM_S.recent){[void](Add-QmMenu $sessions (Cut-QmText ([string]$r.title) 38) 'set' @{Key='pinned';Value=[string]$r.session_id} ($r.session_id -eq $script:CFG.pinned))}
- [void]$m.Items.Add([Windows.Forms.ToolStripSeparator]::new())
- foreach($pair in @(@('停靠位置','layout',$script:QM_LAYOUT_NAMES),@('字号','fontSize',$script:QM_FONT_NAMES))){$sub=Add-QmMenu $m $pair[0] '' $null;foreach($k in $pair[2].Keys){[void](Add-QmMenu $sub $pair[2][$k] 'set' @{Key=$pair[1];Value=$k} ($script:CFG.($pair[1]) -eq $k))}}
- [void](Add-QmMenu $m '重置当前位置' 'reset' $null)
- $sub=Add-QmMenu $m '外观' '' $null;for($i=0;$i -lt $script:QM_SKIN_IDS.Count;$i++){[void](Add-QmMenu $sub $script:QM_SKIN_NAMES[$i] 'set' @{Key='skin';Value=$script:QM_SKIN_IDS[$i]} ($script:CFG.skin -eq $script:QM_SKIN_IDS[$i]))}
- $sub=Add-QmMenu $m '显示内容' '' $null;foreach($k in $script:QM_FIELD_NAMES.Keys){[void](Add-QmMenu $sub $script:QM_FIELD_NAMES[$k] 'set' @{Key=('display.'+$k);Value=(!$script:CFG.display[$k])} $script:CFG.display[$k])}
- [void]$m.Items.Add([Windows.Forms.ToolStripSeparator]::new())
- $sub=Add-QmMenu $m '账户积分与领取' '' $null
+function New-QmTrayMenu([double]$scale=1) {
+ $skin=Resolve-QmSkin $script:CFG.skin;$m=New-QmPopup $skin $scale
+ $status=if($script:QM_S.inFlight){'生成中'}elseif($script:QM_S.sessionId){'空闲'}else{'等待会话'}
+ $summary='TPS '+(Format-QmTps $script:QM_S.tps)+'  ·  '+$status
+ [void](Add-QmMenuHeading $m 'Qoder Meter' $summary)
+ [void](Add-QmMenuHeading $m '快捷与会话')
+ [void](Add-QmMenu $m '设置…' 'settings' $null $false 'settings')
+ [void](Add-QmMenu $m $(if($script:CFG.panelHidden){'显示状态条'}else{'隐藏状态条'}) 'toggleHidden' $null $false $(if($script:CFG.panelHidden){'show'}else{'hide'}))
+ [void](Add-QmMenu $m '自动跟随当前会话' 'set' @{Key='follow';Value=[bool]$script:CFG.pinned} (!$script:CFG.pinned) 'follow')
+ $sessions=Add-QmMenu $m '选择并固定会话' '' $null $false 'session'
+ $recent=@($script:QM_S.recent|Where-Object {$_.session_id})
+ if($recent.Count){
+  foreach($r in $recent){$name=if($r.title){[string]$r.title}else{'未命名会话'};$item=Add-QmMenu $sessions (Cut-QmText $name 30) 'set' @{Key='pinned';Value=[string]$r.session_id} ($r.session_id -eq $script:CFG.pinned) 'session';$item.ToolTipText=$name;$item.AccessibleName=$name}
+ }else{$empty=Add-QmMenu $sessions '暂无最近会话' '' $null $false 'session';$empty.Enabled=$false}
+ [void](Add-QmMenuHeading $m '外观与布局')
+ $sub=Add-QmMenu $m '停靠位置' '' $null $false 'layout'
+ foreach($k in $script:QM_LAYOUT_NAMES.Keys){$item=Add-QmMenu $sub $script:QM_LAYOUT_NAMES[$k] 'set' @{Key='layout';Value=$k} ($script:CFG.layout -eq $k);$item.LayoutIcon=$k}
+ $sub=Add-QmMenu $m '字号' '' $null $false 'font'
+ foreach($k in $script:QM_FONT_NAMES.Keys){[void](Add-QmMenu $sub $script:QM_FONT_NAMES[$k] 'set' @{Key='fontSize';Value=$k} ($script:CFG.fontSize -eq $k) 'font')}
+ $sub=Add-QmMenu $m '外观' '' $null $false 'palette'
+ for($i=0;$i -lt $script:QM_SKIN_IDS.Count;$i++){
+  $key=$script:QM_SKIN_IDS[$i];$item=Add-QmMenu $sub $script:QM_SKIN_NAMES[$i] 'set' @{Key='skin';Value=$key} ($script:CFG.skin -eq $key) 'auto'
+  if($key -ne 'auto'){$item.Swatch=Convert-QmMenuColor $script:QM_SKINS[$key].green}
+ }
+ $sub=Add-QmMenu $m '显示内容' '' $null $false 'fields'
+ $fieldGroups=@(
+  @{Title='速度与时间';Keys=@('tps','turn','age','latency');Icons=@('speed','clock','clock','clock')},
+  @{Title='用量与账户';Keys=@('token','credits','balance','credit');Icons=@('token','credit','account','gift')},
+  @{Title='会话与活动';Keys=@('requests','tools','status','title');Icons=@('session','tools','status','session')}
+ )
+ if($script:CFG.layout -eq 'sidebar'){[void](Add-QmMenuHeading $sub '卡片固定显示全部指标' '以下开关仅作用于条形布局')}
+ foreach($group in $fieldGroups){[void](Add-QmMenuHeading $sub $group.Title);for($i=0;$i -lt $group.Keys.Count;$i++){$k=$group.Keys[$i];[void](Add-QmMenu $sub $script:QM_FIELD_NAMES[$k] 'set' @{Key=('display.'+$k);Value=(!$script:CFG.display[$k])} $script:CFG.display[$k] $group.Icons[$i])}}
+ [void](Add-QmMenuHeading $m '账户与应用')
  $acct=Get-QmAccountStatus
- $claim=Add-QmMenu $sub '立即领取全部' 'claim' $null;$claim.Enabled=(-not $script:ACCOUNT.Running)
- [void](Add-QmMenu $sub '自动领取全部权益' 'set' @{Key='creditAuto';Value=(!$script:CFG.creditAuto)} $script:CFG.creditAuto)
- [void](Add-QmMenu $sub '领取记录' 'claims' $null)
- [void](Add-QmMenu $sub '打开 Qoder 用量页' 'usagePage' $null)
- $info=Add-QmMenu $sub $(if($acct.State -eq 'ok'){'余额 '+(Format-QmNum $acct.Balance)+' · 今日 +'+(Format-QmNum $acct.TodayAmount)}else{'账户暂不可用'}) '' $null;$info.Enabled=$false
- [void](Add-QmMenu $m '随 Qoder 自动启动' 'set' @{Key='autostart';Value=(!(Get-QmAutoStart))} (Get-QmAutoStart))
- [void](Add-QmMenu $m 'Qoder 退出时关闭' 'set' @{Key='closeWithQoder';Value=(!$script:CFG.closeWithQoder)} $script:CFG.closeWithQoder)
- [void](Add-QmMenu $m '立即刷新' 'refresh' $null)
- [void](Add-QmMenu $m '打开设置目录' 'settingsDir' $null)
- [void]$m.Items.Add([Windows.Forms.ToolStripSeparator]::new());[void](Add-QmMenu $m '退出 Qoder Meter' 'exit' $null)
+ $detail=switch($acct.State){'ok'{'余 '+(Format-QmNum $acct.Balance)+'  ·  今 +'+(Format-QmNum $acct.TodayAmount)};'noauth'{'未登录 Qoder'};'error'{'账户读取失败，请稍后重试'};default{'正在读取账户…'}}
+ $sub=Add-QmMenu $m '账户积分与领取' '' $null $false 'account' $detail
+ $stateText=if($script:ACCOUNT.Running){'正在领取，请稍候'}elseif($acct.Claimable.Count){'待领取 '+$acct.Claimable.Count+' 项权益'}elseif($acct.State -eq 'ok'){'当前没有待领权益'}else{$detail}
+ [void](Add-QmMenuHeading $sub $stateText $(if($acct.State -eq 'ok'){$detail}else{'账户信息仅使用本地缓存'}))
+ $claim=Add-QmMenu $sub '立即领取全部' 'claim' $null $false 'gift' '' 'green';$claim.Enabled=(-not $script:ACCOUNT.Running)
+ [void](Add-QmMenu $sub '自动领取全部权益' 'set' @{Key='creditAuto';Value=(!$script:CFG.creditAuto)} $script:CFG.creditAuto 'auto')
+ [void]$sub.DropDownItems.Add([Windows.Forms.ToolStripSeparator]::new())
+ [void](Add-QmMenu $sub '领取记录' 'claims' $null $false 'history')
+ [void](Add-QmMenu $sub '打开 Qoder 用量页' 'usagePage' $null $false 'link')
+ $sub=Add-QmMenu $m '启动与退出行为' '' $null $false 'power'
+ $autoStart=Get-QmAutoStart
+ [void](Add-QmMenu $sub '随 Qoder 自动启动' 'set' @{Key='autostart';Value=(!$autoStart)} $autoStart 'power')
+ [void](Add-QmMenu $sub 'Qoder 退出时关闭' 'set' @{Key='closeWithQoder';Value=(!$script:CFG.closeWithQoder)} $script:CFG.closeWithQoder 'exit')
+ $sub=Add-QmMenu $m '更多操作' '' $null $false 'more'
+ [void](Add-QmMenu $sub '立即刷新' 'refresh' $null $false 'refresh')
+ [void](Add-QmMenu $sub '重置当前位置' 'reset' $null $false 'reset')
+ [void](Add-QmMenu $sub '打开设置目录' 'settingsDir' $null $false 'folder')
+ [void](Add-QmMenu $m '退出 Qoder Meter' 'exit' $null $false 'exit' '' 'red')
  return $m
 }
 function Show-QmContextMenu {
- if($script:QM_MENU){$script:QM_MENU.Dispose()};$script:QM_MENU=New-QmTrayMenu;$script:QM_MENU.Show([Windows.Forms.Cursor]::Position)
+ if($script:QM_MENU){$script:QM_MENU.Dispose()}
+ $point=[Windows.Forms.Cursor]::Position
+ $scale=[QoderMeter.MenuDisplay]::ScaleAt($point)
+ $script:QM_MENU=New-QmTrayMenu $scale;$script:QM_MENU.Show($point)
 }
 function Install-QmTray {
  $bmp=[Drawing.Bitmap]::new(20,20);$g=[Drawing.Graphics]::FromImage($bmp);$g.SmoothingMode='AntiAlias';$g.Clear([Drawing.Color]::Transparent)

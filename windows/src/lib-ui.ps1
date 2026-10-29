@@ -1,5 +1,6 @@
 ﻿# WPF views. Geometry is physical pixels; controls use DIP. Values update in place.
 Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase,System.Windows.Forms,System.Drawing
+. (Join-Path $PSScriptRoot 'lib-menu.ps1')
 $script:QM_SKINS=[ordered]@{
  paper=@{bg='#FAFFFFFF';border='#DEE3EB';text='#141A21';soft='#475261';gray='#6E7887';faint='#7B8797';green='#089466';greenDim='#298C70';gold='#A86912';red='#D62929';blue='#2461E6';track='#EBEEF2';divider='#EBEEF2';greenTint='#1A089466';goldTint='#1CA86912';grayTint='#126E7887';blueTint='#1A2461E6';highlight='#B3FFFFFF'}
  graphite=@{bg='#F816181D';border='#1AFFFFFF';text='#F5F5F5';soft='#C7C7C7';gray='#999999';faint='#969BA5';green='#57E099';greenDim='#61B88F';gold='#F2C76B';red='#F57066';blue='#85B3FF';track='#21FFFFFF';divider='#13FFFFFF';greenTint='#2457E099';goldTint='#26F2C76B';grayTint='#14FFFFFF';blueTint='#2485B3FF';highlight='#0FFFFFFF'}
@@ -46,6 +47,7 @@ function Set-QmNoActivate($window){$h=Get-QmHwnd $window;if($h -ne [IntPtr]::Zer
 function New-QmBorder($skin,[double]$radius){$t=$script:QM_SKINS[$skin];$b=[Windows.Controls.Border]::new();$b.Background=Get-QmBrush $t.bg;$b.BorderBrush=Get-QmBrush $t.border;$b.BorderThickness=[Windows.Thickness]::new(1);$b.CornerRadius=[Windows.CornerRadius]::new($radius);return $b}
 function Reset-QmViewRefs {
  $script:UI_SEGS=@{};$script:UI_GROUPS=@{};$script:UI_TPS=$null;$script:UI_TITLE=$null;$script:UI_STATUS=$null;$script:UI_SUB=$null;$script:UI_FOOT=$null;$script:UI_CREDIT=$null;$script:UI_CREDIT_DOT=$null;$script:UI_SPARK=$null;$script:UI_DOT=$null;$script:UI_STATE_PILL=$null;$script:UI_BAR=$null;$script:UI_GEAR=$null;$script:UI_HALO=$null;$script:UI_SPARK_RECTS=@()
+ $script:UI_BAR_PILLS=@{};$script:UI_BAR_TPS=$null;$script:UI_BAR_METRICS_SIG=''
 }
 function New-QmGear($skin,[double]$size){
  $b=[Windows.Controls.Button]::new();$b.Content=[string][char]0xE713;$b.FontFamily=[Windows.Media.FontFamily]::new('Segoe MDL2 Assets');$b.FontSize=12
@@ -70,9 +72,17 @@ function New-QmBarField($skin,[double]$sc){
  $line.Margin=[Windows.Thickness]::new(0,0,4*$sc,0);$line.IsHitTestVisible=$false;$line.SnapsToDevicePixels=$true
  [void]$p.Children.Add($line);return $p
 }
+function Set-QmBarTextSlot($text,[string]$sample,[double]$minimum=0){
+ # Measure a representative capacity only while building, never the live value.
+ # Fixed TextBlock widths retain ellipsis while numbers/status/title change.
+ $original=$text.Text;$text.Text=$sample
+ $text.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+ $width=[math]::Max($minimum,[math]::Ceiling($text.DesiredSize.Width))
+ $text.Text=$original;$text.Width=$width
+}
 function Build-QmBar($cfg,$skin,[double]$sc){
  Reset-QmViewRefs;$t=$script:QM_SKINS[$skin]
- $border=New-QmBorder $skin 10;$border.Height=[math]::Min(30,26*$sc);$border.Width=680
+ $border=New-QmBorder $skin 10;$border.Height=[math]::Min(30,26*$sc);$border.Width=680;$border.ClipToBounds=$true
  $grid=[Windows.Controls.Grid]::new();$grid.Margin=[Windows.Thickness]::new(7,0,4,0)
  foreach($width in @('Auto','*','Auto')){$cd=[Windows.Controls.ColumnDefinition]::new();$cd.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width);[void]$grid.ColumnDefinitions.Add($cd)}
  $left=New-QmPanel $true;$middle=New-QmPanel $true;$right=New-QmPanel $true
@@ -81,40 +91,65 @@ function Build-QmBar($cfg,$skin,[double]$sc){
  $halo=[Windows.Controls.Border]::new();$halo.Width=14;$halo.Height=14;$halo.CornerRadius=[Windows.CornerRadius]::new(7);$halo.Background=Get-QmBrush $t.grayTint;$halo.Margin=[Windows.Thickness]::new(0,0,6,0)
  $dot=[Windows.Shapes.Ellipse]::new();$dot.Width=6;$dot.Height=6;$dot.Fill=Get-QmBrush $t.gray;$halo.Child=$dot;[void]$left.Children.Add($halo);$script:UI_DOT=$dot;$script:UI_HALO=$halo
  if($cfg.display.tps){
-  $lab=New-QmText 'TPS' (9.5*$sc) $t.faint;$lab.Margin=[Windows.Thickness]::new(0,0,4,0);[void]$left.Children.Add($lab)
-  $v=New-QmText '—' (18*$sc) $t.green 'SemiBold' $true;$v.MinWidth=46*$sc;$v.Margin=[Windows.Thickness]::new(0,0,5,0);[void]$left.Children.Add($v);$script:UI_TPS=$v
+  $tps=New-QmPanel $true;[void]$left.Children.Add($tps);$script:UI_BAR_TPS=$tps
+  $lab=New-QmText 'TPS' (9.5*$sc) $t.faint;$lab.Margin=[Windows.Thickness]::new(0,0,4,0);[void]$tps.Children.Add($lab)
+  $v=New-QmText '—' (18*$sc) $t.green 'SemiBold' $true;Set-QmBarTextSlot $v '9999' (46*$sc)
+  $v.Margin=[Windows.Thickness]::new(0,0,5,0);[void]$tps.Children.Add($v);$script:UI_TPS=$v
  }
- $defs=@(@('title','',140),@('turn','本轮 ',100),@('age','总计 ',108),@('token','Token ',108),@('balance','余额 ',94),@('credits','消耗 ',94),@('requests','请求 ',74),@('tools','工具 ',74),@('latency','延迟 ',96))
+ $defs=@(@('title','',''),@('turn','本轮 ','99h 59m'),@('age','总计 ','99h 59m'),@('token','Token ','≈999.9k'),@('balance','余额 ','999.9k'),@('credits','消耗 ','9999.99'),@('requests','请求 ','999.9k'),@('tools','工具 ','999.9k'),@('latency','延迟 ','59m 59s'))
  foreach($def in $defs){
   $key=$def[0];if(!$cfg.display[$key]){continue};if($key -eq 'title' -and $cfg.layout -in @('title','toolbar')){continue}
   $p=New-QmBarField $skin $sc
   if($def[1]){[void]$p.Children.Add((New-QmText $def[1] (10.5*$sc) $t.soft))}
   $v=New-QmText '—' (12*$sc) $(if($key -eq 'credits'){$t.gold}else{$t.text}) 'Medium' ($key -ne 'title')
-  $v.MaxWidth=110*$sc;[void]$p.Children.Add($v);[void]$middle.Children.Add($p)
-  $script:UI_GROUPS[$key]=[pscustomobject]@{Element=$p;Need=[double]$def[2]*$sc}
+  if($key -eq 'title'){$v.Width=110*$sc}else{Set-QmBarTextSlot $v $def[2]}
+  [void]$p.Children.Add($v);[void]$middle.Children.Add($p)
+  $p.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+  $script:UI_GROUPS[$key]=[pscustomobject]@{Element=$p;Need=[double]$p.DesiredSize.Width}
   if($key -eq 'title'){$script:UI_TITLE=$v}else{$script:UI_SEGS[$key]=$v}
  }
  if($cfg.display.status){
   $p=New-QmBarField $skin $sc;$pill=New-QmPill '等待会话' $skin 0 (20*$sc);$pill.Margin=[Windows.Thickness]::new(0)
-  [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_STATUS=$pill.Child;$script:UI_STATE_PILL=$pill
+  Set-QmBarTextSlot $pill.Child '生成中 59m 59s';$pill.Width=$pill.Child.Width+20
+  [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_STATUS=$pill.Child;$script:UI_STATE_PILL=$pill;$script:UI_BAR_PILLS.status=$p
  }
  if($cfg.display.credit){
   $p=New-QmBarField $skin $sc;$pill=New-QmPill '账户读取中' $skin 0 (20*$sc);$pill.Margin=[Windows.Thickness]::new(0)
-  [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_CREDIT=$pill.Child
+  Set-QmBarTextSlot $pill.Child '余 999,999 · 今 +99,999';$pill.Width=$pill.Child.Width+20
+  [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_CREDIT=$pill.Child;$script:UI_BAR_PILLS.credit=$p
  }
  [void]$right.Children.Add((New-QmGear $skin (22*$sc)))
  $border.Child=$grid;$script:UI_BAR=$border;$script:UI_BAR_LEFT=$left;$script:UI_BAR_RIGHT=$right;$script:UI_BAR_SCALE=$sc;$script:UI_BAR_PAD=15
+ Set-QmBarWidth 680
  return $border
 }
-function Get-QmPreferredBarWidth {
- $infinite=[Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity)
- $script:UI_BAR_LEFT.Measure($infinite);$script:UI_BAR_RIGHT.Measure($infinite)
- $need=$script:UI_BAR_PAD+$script:UI_BAR_LEFT.DesiredSize.Width+$script:UI_BAR_RIGHT.DesiredSize.Width
- foreach($group in $script:UI_GROUPS.Values){
-  $was=$group.Element.Visibility;$group.Element.Visibility='Visible';$group.Element.Measure($infinite)
-  $need+=$group.Element.DesiredSize.Width;$group.Element.Visibility=$was
+function Sync-QmBarMeasurementContext {
+ # A newly attached host or a DPI transition can leave collapsed descendants with
+ # measurements from the previous context. Invalidate the whole tree once, so a
+ # later text update cannot be the event that finally corrects their slot widths.
+ $dpi=[Windows.Media.VisualTreeHelper]::GetDpi($script:UI_BAR)
+ $signature="$($dpi.DpiScaleX)|$($dpi.DpiScaleY)|$($script:UI_BAR.UseLayoutRounding)"
+ if($signature -eq $script:UI_BAR_METRICS_SIG){return}
+ $pending=[Collections.Generic.Stack[Windows.DependencyObject]]::new();$pending.Push($script:UI_BAR)
+ while($pending.Count){
+  $element=$pending.Pop()
+  if($element -is [Windows.UIElement]){$element.InvalidateMeasure()}
+  for($i=0;$i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($element);$i++){$pending.Push([Windows.Media.VisualTreeHelper]::GetChild($element,$i))}
  }
- return [math]::Ceiling($need)
+ $script:UI_BAR_METRICS_SIG=$signature
+}
+function Get-QmPreferredBarWidth {
+ # Measure fixed capacities with the current host's DPI/layout rounding, never
+ # cache pre-host measurements. Restore the fit without changing visible fields.
+ if(!$script:UI_BAR){return 0}
+ Sync-QmBarMeasurementContext
+ $states=@();$gearWidth=$script:UI_GEAR.Width
+ $elements=@($script:UI_HALO,$script:UI_BAR_TPS)+@($script:UI_BAR_PILLS.Values)+@($script:UI_GROUPS.Values|ForEach-Object{$_.Element})
+ try{
+  $script:UI_GEAR.Width=22*$script:UI_BAR_SCALE
+  foreach($el in $elements){if($el){$states+=@{Element=$el;Visibility=$el.Visibility};$el.Visibility='Visible'}}
+  return Get-QmContentBarWidth
+ }finally{$script:UI_GEAR.Width=$gearWidth;foreach($state in $states){$state.Element.Visibility=$state.Visibility}}
 }
 function Get-QmContentBarWidth {
  if(!$script:UI_BAR){return 0}
@@ -127,26 +162,52 @@ function Get-QmContentBarWidth {
  }
  return [math]::Ceiling($need)
 }
-function Set-QmBarWidth([double]$available){
- if(!$script:UI_BAR){return}
+function Get-QmBarFixedWidth {
  $infinite=[Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity)
  $script:UI_BAR_LEFT.Measure($infinite);$script:UI_BAR_RIGHT.Measure($infinite)
- $fixed=$script:UI_BAR_PAD+$script:UI_BAR_LEFT.DesiredSize.Width+$script:UI_BAR_RIGHT.DesiredSize.Width
- $widths=@{}
- foreach($key in $script:UI_GROUPS.Keys){
-  $el=$script:UI_GROUPS[$key].Element;$el.Visibility='Visible';$el.Measure($infinite);$widths[$key]=[double]$el.DesiredSize.Width
+ return $script:UI_BAR_PAD+$script:UI_BAR_LEFT.DesiredSize.Width+$script:UI_BAR_RIGHT.DesiredSize.Width
+}
+function Set-QmBarWidth([double]$available){
+ if(!$script:UI_BAR){return}
+ Sync-QmBarMeasurementContext
+ $available=[math]::Max(0,$available)
+ $script:UI_GEAR.Width=[math]::Min(22*$script:UI_BAR_SCALE,[math]::Max(0,$available-$script:UI_BAR_PAD))
+ foreach($pill in $script:UI_BAR_PILLS.Values){$pill.Visibility='Visible'}
+ if($script:UI_BAR_TPS){$script:UI_BAR_TPS.Visibility='Visible'}
+ $script:UI_HALO.Visibility='Visible'
+ $fixed=Get-QmBarFixedWidth
+ $infinite=[Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity)
+ foreach($group in $script:UI_GROUPS.Values){
+  $group.Element.Visibility='Visible';$group.Element.Measure($infinite)
+  $group.Need=[double]$group.Element.DesiredSize.Width
  }
+ # Reserve core metrics before the redundant status pill in narrow regions.
+ # Visibility decisions use only slot capacities; status/amount updates cannot toggle them.
+ $core=0.0
+ foreach($key in @('balance','token')){if($script:UI_GROUPS.ContainsKey($key)){$core+=$script:UI_GROUPS[$key].Need}}
+ if($script:UI_BAR_PILLS.status -and $fixed+$core -gt $available){
+  $script:UI_BAR_PILLS.status.Visibility='Collapsed';$fixed=Get-QmBarFixedWidth
+ }
+ # The balance metric can replace the wider account summary when both core metrics
+ # would otherwise be squeezed out. Full account details remain in the tooltip.
+ if($script:UI_BAR_PILLS.credit -and ($fixed -gt $available -or ($script:UI_GROUPS.ContainsKey('balance') -and $fixed+$core -gt $available))){
+  $script:UI_BAR_PILLS.credit.Visibility='Collapsed';$fixed=Get-QmBarFixedWidth
+ }
+ # At very narrow widths retain settings instead of allowing fixed endpoints to overlap.
+ if($script:UI_BAR_TPS -and $fixed -gt $available){
+  $script:UI_BAR_TPS.Visibility='Collapsed';$fixed=Get-QmBarFixedWidth
+ }
+ if($fixed -gt $available){$script:UI_HALO.Visibility='Collapsed';$fixed=Get-QmBarFixedWidth}
  $budget=[math]::Max(0.0,$available-$fixed);$used=0.0
  # Keep core accounting before ancillary metrics; all suppressed values remain in the tooltip.
  foreach($key in @('balance','token','credits','turn','age','latency','requests','tools','title')){
-  if(!$widths.ContainsKey($key)){continue}
-  $w=$widths[$key]
+  if(!$script:UI_GROUPS.ContainsKey($key)){continue}
+  $w=$script:UI_GROUPS[$key].Need
   if($w -le ($budget-$used+0.01)){$script:UI_GROUPS[$key].Element.Visibility='Visible';$used+=$w}
   else{$script:UI_GROUPS[$key].Element.Visibility='Collapsed'}
  }
- $width=[math]::Min($available,[math]::Ceiling($fixed+$used))
- if($width -lt 40){$width=40}
- $script:UI_BAR.Width=$width
+ $width=[math]::Min($available,[math]::Max(40,[math]::Ceiling($fixed+$used)))
+ if($script:UI_BAR.Width -ne $width){$script:UI_BAR.Width=$width}
 }
 function Add-QmCanvas($canvas,$element,[double]$x,[double]$y){[Windows.Controls.Canvas]::SetLeft($element,$x);[Windows.Controls.Canvas]::SetTop($element,$y);[void]$canvas.Children.Add($element)}
 function Build-QmCard($cfg,$skin,[double]$sc){

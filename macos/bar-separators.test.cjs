@@ -79,7 +79,7 @@ const context = vm.createContext({
 vm.runInContext(source.replace(/\nmain\(\);\s*$/, '\n') + `
   globalThis.probe = {
     state, FONT_SIZES, DISPLAY_FIELDS, SKINS, applyFontScale, computeBarLayout,
-    buildBar, resetUI, setBarMetrics, metricSampleFields,
+    buildBar, resetUI, setBarMetrics, metricSampleFields, textWidth,
     theme: function (id) { T = SKINS[id]; },
     controls: function () { return { metricLabels, titleLabel, tpsValue, latencyValue, stateLabel }; }
   };
@@ -194,4 +194,35 @@ for (const mode of modes) for (const font of p.FONT_SIZES) for (const unit of ['
   }
 }
 assert.deepEqual(forbiddenCalls, [], 'An offline check attempted non-rendering I/O');
-console.log(`PASS: ${layouts} layouts, ${builds} real-source mock builds; all 1024 field masks, four sizes, both token units, narrow/wide bars, five skins. AppKit rendering is NOT tested here.`);
+
+// Fixed capacity: the bar is laid out from sample strings, never from live data.
+// Long timers and values must stay inside their reserved frames and leave W and
+// every neighbour's x unchanged.
+p.state.fontSize = 'normal';
+p.state.tokenUnit = 'latin';
+p.state.topInline = false;
+p.applyFontScale();
+p.DISPLAY_FIELDS.forEach(field => { p.state.display[field.id] = true; });
+for (const mode of ['title', 'top', 'bottom']) {
+  const before = p.computeBarLayout(mode);
+  p.resetUI();
+  p.buildBar(view('root'), mode, before);
+  p.setBarMetrics(before, '999999h 59m', '999999h 59m', '≈ 999999999.99m',
+    999999999.99, 999999999, 999999999);
+  const after = p.computeBarLayout(mode);
+  assert.equal(after.W, before.W, 'Live values changed the outer width: ' + mode);
+  assert.deepEqual(Array.from(after.fields, f => [f.id, f.x, f.w]),
+    Array.from(before.fields, f => [f.id, f.x, f.w]), 'Live values moved a column: ' + mode);
+  const controls = p.controls();
+  before.metrics.forEach(field => {
+    near(controls.metricLabels[field.id].frame.origin.x, field.x);
+    near(controls.metricLabels[field.id].frame.size.width, field.w);
+  });
+}
+const capacity = p.computeBarLayout('bottom');
+assert.ok(capacity.statusPillW >= p.textWidth('生成中 59m 59s', capacity.pillFont) +
+  capacity.pillPad * 2 - 0.001, 'Status pill does not reserve minute-form capacity');
+assert.ok(capacity.latencyPillW >= p.textWidth('延迟 59m 59s', capacity.pillFont) +
+  capacity.pillPad * 2 - 0.001, 'Latency pill does not reserve minute-form capacity');
+
+console.log(`PASS: ${layouts} layouts, ${builds} real-source mock builds; all 1024 field masks, four sizes, both token units, narrow/wide bars, five skins, long-value width invariance. AppKit rendering is NOT tested here.`);

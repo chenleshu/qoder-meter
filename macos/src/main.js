@@ -1664,8 +1664,10 @@ function computeBarLayout(mode) {
   const tpsGap = Math.round(3 * S);
   const tpsBlock = tpsLabelW + tpsGap + tpsValueW;
 
-  const latencyTextW = textWidth('延迟 88.8s', pillFont);
-  const statusTextW = textWidth('生成中 88.8s', pillFont);
+  // Fixed capacity: reserve the widest minute-form label so a live timer only
+  // changes text inside the pill, never the bar width or a neighbour's x.
+  const latencyTextW = textWidth('延迟 59m 59s', pillFont);
+  const statusTextW = textWidth('生成中 59m 59s', pillFont);
   const latencyPillW = latencyTextW + pillPad * 2;
   const statusPillW = statusTextW + pillPad * 2;
   let fields = [];
