@@ -63,10 +63,38 @@ if($Full){
  $script:CFG=New-QmConfig;$script:CFG.layout='title';foreach($key in @($script:CFG.display.Keys)){$script:CFG.display[$key]=$false}
  $minimal=Build-QmBar $script:CFG 'paper' 1
  if(Get-Command Get-QmPreferredBarWidth -ErrorAction SilentlyContinue){Check ((Get-QmPreferredBarWidth) -lt 200) 'disabled fields shrink preferred width'}else{Check $false 'disabled fields shrink preferred width'}
+ Check ($script:UI_GROUPS.Count -eq 0 -and $script:UI_BAR_RIGHT.Children.Count -eq 1) 'all fields disabled leave no orphan separators'
+ $script:CFG.display.token=$true;$single=Build-QmBar $script:CFG 'paper' 1
+ Check ($script:UI_GROUPS.Count -eq 1 -and $script:UI_GROUPS.token.Element.Children[0].Tag -eq 'QmBarSeparator' -and $script:UI_BAR_RIGHT.Children.Count -eq 1) 'single metric owns one divider after the persistent status dot'
+ foreach($skin in $script:QM_SKINS.Keys){
+  foreach($scale in $script:QM_FONT_SIZES.Values){
+   $script:CFG=New-QmConfig;$bar=Build-QmBar $script:CFG $skin $scale
+   $fields=@($script:UI_GROUPS.Values|ForEach-Object{$_.Element})+@($script:UI_BAR_RIGHT.Children|Where-Object{$_.Tag -eq 'QmBarField'})
+   $valid=$true
+   foreach($field in $fields){
+    $lines=@($field.Children|Where-Object{$_.Tag -eq 'QmBarSeparator'})
+    if($lines.Count -ne 1){$valid=$false;continue}
+    $line=$lines[0]
+    if($field.Children[0] -ne $line -or $line.Width -ne 1 -or [math]::Abs($line.Height-12*$scale) -gt .001 -or $line.Opacity -ne .35 -or $line.IsHitTestVisible -or $line.Background.Color -ne (Get-QmBrush $script:QM_SKINS[$skin].gray).Color){$valid=$false}
+   }
+   Check $valid "$skin scale=$scale fields own subtle theme-aware noninteractive dividers"
+   Check ($script:UI_BAR_RIGHT.Children[$script:UI_BAR_RIGHT.Children.Count-1] -eq $script:UI_GEAR) "$skin scale=$scale ends with settings rather than a divider"
+   $script:UI_TPS.Text='133';$script:UI_SEGS.token.Text='207.9k';$script:UI_CREDIT.Text='5,730 / +4,096'
+   $fits=$true;$narrowCount=0
+   foreach($available in @(420,900,420)){
+    Set-QmBarWidth $available
+    $content=Get-QmContentBarWidth
+    if($content -gt $available+1 -or [math]::Abs($script:UI_BAR.Width-$content) -gt 2){$fits=$false}
+    $visibleCount=@($script:UI_GROUPS.Values|Where-Object{$_.Element.Visibility -eq 'Visible'}).Count
+    if($available -eq 420){if($narrowCount -and $narrowCount -ne $visibleCount){$fits=$false};$narrowCount=$visibleCount}
+   }
+   Check $fits "$skin scale=$scale measures dividers and remains stable across narrow-wide-narrow layout"
+  }
+ }
  $settingsLib=Join-Path $root 'src\lib-settings.ps1'
  if(!(Test-Path $settingsLib)){Check $false 'settings window implementation missing'}else{
   . $settingsLib
-  $script:QM_VERSION='test';$script:UI=@{settings=$null;skin='paper'};$script:CREDIT=@{Status=$null;Running=$false}
+  $script:QM_VERSION='test';$script:UI=@{settings=$null;skin='paper'};$script:ACCOUNT=@{Running=$false;Auth=$null;Usage=$null;Campaigns=$null;Error='';UsageAt=0L;CampAt=0L;NextTry=0L;LastFail=@{};Notified=$null;At=''}
   function Get-QmAutoStart {return $false}
   function Get-QmUpdateStatus {return [pscustomobject]@{State='idle';Text='';Url=''}}
   $sw=New-QmSettingsWindow

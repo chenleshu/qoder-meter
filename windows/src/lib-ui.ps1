@@ -12,7 +12,7 @@ $script:QM_SKIN_NAMES=@('自动（Qoder 优先）','纸白','石墨','海盐','�
 $script:QM_FONT_SIZES=[ordered]@{small=.9;normal=1.0;large=1.12;xlarge=1.24}
 $script:QM_FONT_NAMES=[ordered]@{small='小';normal='标准';large='大';xlarge='特大'}
 $script:QM_LAYOUT_NAMES=[ordered]@{title='标题栏中部';toolbar='会话工具栏中部';bottom='输入框下方';sidebar='完整统计卡片'}
-$script:QM_FIELD_NAMES=[ordered]@{tps='TPS';turn='本轮';age='总计';token='Token';credits='积分';requests='请求';tools='工具';latency='延迟';status='状态';title='标题';credit='每日 Credits'}
+$script:QM_FIELD_NAMES=[ordered]@{tps='TPS';turn='本轮';age='总计';token='Token';balance='余额';credits='消耗';requests='请求';tools='工具';latency='延迟';status='状态';title='标题';credit='账户积分'}
 $script:QM_BRUSH_CACHE=@{}
 function Get-QmBrush([string]$hex){
  if(!$hex){throw 'Empty color'}
@@ -61,6 +61,15 @@ function New-QmPill($text,$skin,[double]$width,[double]$height){
  $p.Height=$height;$p.Margin=[Windows.Thickness]::new(3,0,0,0)
  $tx=New-QmText $text 11 $script:QM_SKINS[$skin].gray 'Medium';$tx.HorizontalAlignment='Center';$p.Child=$tx;return $p
 }
+function New-QmBarField($skin,[double]$sc){
+ # The leading status dot is always present. Keep each divider inside its following
+ # field so adaptive hiding removes both, without leaving leading/trailing rules.
+ $p=New-QmPanel $true;$p.Tag='QmBarField';$p.Margin=[Windows.Thickness]::new(0,0,4*$sc,0)
+ $line=[Windows.Controls.Border]::new();$line.Tag='QmBarSeparator';$line.Width=1;$line.Height=12*$sc
+ $line.Background=Get-QmBrush $script:QM_SKINS[$skin].gray;$line.Opacity=.35;$line.VerticalAlignment='Center'
+ $line.Margin=[Windows.Thickness]::new(0,0,4*$sc,0);$line.IsHitTestVisible=$false;$line.SnapsToDevicePixels=$true
+ [void]$p.Children.Add($line);return $p
+}
 function Build-QmBar($cfg,$skin,[double]$sc){
  Reset-QmViewRefs;$t=$script:QM_SKINS[$skin]
  $border=New-QmBorder $skin 10;$border.Height=[math]::Min(30,26*$sc);$border.Width=680
@@ -75,18 +84,24 @@ function Build-QmBar($cfg,$skin,[double]$sc){
   $lab=New-QmText 'TPS' (9.5*$sc) $t.faint;$lab.Margin=[Windows.Thickness]::new(0,0,4,0);[void]$left.Children.Add($lab)
   $v=New-QmText '—' (18*$sc) $t.green 'SemiBold' $true;$v.MinWidth=46*$sc;$v.Margin=[Windows.Thickness]::new(0,0,5,0);[void]$left.Children.Add($v);$script:UI_TPS=$v
  }
- $defs=@(@('title','',140),@('turn','本轮 ',100),@('age','总计 ',108),@('token','Token ',108),@('credits','积分 ',94),@('requests','请求 ',74),@('tools','工具 ',74),@('latency','延迟 ',96))
+ $defs=@(@('title','',140),@('turn','本轮 ',100),@('age','总计 ',108),@('token','Token ',108),@('balance','余额 ',94),@('credits','消耗 ',94),@('requests','请求 ',74),@('tools','工具 ',74),@('latency','延迟 ',96))
  foreach($def in $defs){
   $key=$def[0];if(!$cfg.display[$key]){continue};if($key -eq 'title' -and $cfg.layout -in @('title','toolbar')){continue}
-  $p=New-QmPanel $true;$p.Margin=[Windows.Thickness]::new(0,0,8*$sc,0)
+  $p=New-QmBarField $skin $sc
   if($def[1]){[void]$p.Children.Add((New-QmText $def[1] (10.5*$sc) $t.soft))}
   $v=New-QmText '—' (12*$sc) $(if($key -eq 'credits'){$t.gold}else{$t.text}) 'Medium' ($key -ne 'title')
   $v.MaxWidth=110*$sc;[void]$p.Children.Add($v);[void]$middle.Children.Add($p)
   $script:UI_GROUPS[$key]=[pscustomobject]@{Element=$p;Need=[double]$def[2]*$sc}
   if($key -eq 'title'){$script:UI_TITLE=$v}else{$script:UI_SEGS[$key]=$v}
  }
- if($cfg.display.status){$pill=New-QmPill '等待会话' $skin 0 (20*$sc);[void]$right.Children.Add($pill);$script:UI_STATUS=$pill.Child;$script:UI_STATE_PILL=$pill}
- if($cfg.display.credit){$pill=New-QmPill '领取状态 —' $skin 0 (20*$sc);[void]$right.Children.Add($pill);$script:UI_CREDIT=$pill.Child}
+ if($cfg.display.status){
+  $p=New-QmBarField $skin $sc;$pill=New-QmPill '等待会话' $skin 0 (20*$sc);$pill.Margin=[Windows.Thickness]::new(0)
+  [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_STATUS=$pill.Child;$script:UI_STATE_PILL=$pill
+ }
+ if($cfg.display.credit){
+  $p=New-QmBarField $skin $sc;$pill=New-QmPill '账户读取中' $skin 0 (20*$sc);$pill.Margin=[Windows.Thickness]::new(0)
+  [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_CREDIT=$pill.Child
+ }
  [void]$right.Children.Add((New-QmGear $skin (22*$sc)))
  $border.Child=$grid;$script:UI_BAR=$border;$script:UI_BAR_LEFT=$left;$script:UI_BAR_RIGHT=$right;$script:UI_BAR_SCALE=$sc;$script:UI_BAR_PAD=15
  return $border
@@ -123,7 +138,7 @@ function Set-QmBarWidth([double]$available){
  }
  $budget=[math]::Max(0.0,$available-$fixed);$used=0.0
  # Keep core accounting before ancillary metrics; all suppressed values remain in the tooltip.
- foreach($key in @('token','credits','turn','age','latency','requests','tools','title')){
+ foreach($key in @('balance','token','credits','turn','age','latency','requests','tools','title')){
   if(!$widths.ContainsKey($key)){continue}
   $w=$widths[$key]
   if($w -le ($budget-$used+0.01)){$script:UI_GROUPS[$key].Element.Visibility='Visible';$used+=$w}
@@ -148,13 +163,13 @@ function Build-QmCard($cfg,$skin,[double]$sc){
  for($i=0;$i -lt 14;$i++){$rect=[Windows.Shapes.Rectangle]::new();$rect.Width=4.2;$rect.Height=2;$rect.RadiusX=2;$rect.RadiusY=2;$rect.Fill=Get-QmBrush $t.track;[Windows.Controls.Canvas]::SetLeft($rect,($i*7));[Windows.Controls.Canvas]::SetBottom($rect,0);[void]$spark.Children.Add($rect);$script:UI_SPARK_RECTS+=,$rect}
  $line=[Windows.Controls.Border]::new();$line.Width=218;$line.Height=1;$line.Background=Get-QmBrush $t.divider;Add-QmCanvas $c $line 14 136
  $line=[Windows.Controls.Border]::new();$line.Width=1;$line.Height=64;$line.Background=Get-QmBrush $t.divider;Add-QmCanvas $c $line 122 144
- foreach($cell in @(@('turn','本轮',14,145),@('age','总计',130,145),@('token','Token',14,180),@('credits','积分',130,180))){
+ foreach($cell in @(@('turn','本轮',14,145),@('age','总计',130,145),@('token','Token',14,180),@('credits','消耗',130,180))){
   Add-QmCanvas $c (New-QmText $cell[1] 9.2 $t.faint) $cell[2] $cell[3]
   $v=New-QmText '—' 13 $(if($cell[0] -eq 'credits'){$t.gold}else{$t.text}) 'Medium' $true;$v.Width=100
   Add-QmCanvas $c $v $cell[2] ($cell[3]+14);$script:UI_SEGS[$cell[0]]=$v
  }
  $foot=New-QmText '延迟 — · 0 请求 · 0 工具' 9 $t.faint;$foot.Width=218;Add-QmCanvas $c $foot 14 214;$script:UI_FOOT=$foot
- $credit=New-QmText '每日 Credits · 状态未知' 9.5 $t.gray 'Medium';$credit.Width=198;Add-QmCanvas $c $credit 14 232;$script:UI_CREDIT=$credit
+ $credit=New-QmText '余 — · 今 —' 9.5 $t.gray 'Medium';$credit.Width=198;Add-QmCanvas $c $credit 14 232;$script:UI_CREDIT=$credit
  Add-QmCanvas $c (New-QmGear $skin 22) 212 225
  return $b
 }

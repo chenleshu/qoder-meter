@@ -74,12 +74,12 @@ function New-QmSettingsWindow {
   Sync-QmSettingsPinned
   Add-QmSettingsCheck $body '随 Qoder 自动启动' 'autostart' (Get-QmAutoStart) $skin
   Add-QmSettingsCheck $body 'Qoder 退出时关闭' 'closeWithQoder' $script:CFG.closeWithQoder $skin
-  Add-QmSettingsHeading $body '每日 Credits' $skin
-  Add-QmSettingsCheck $body '错过计划时点后自动补领' 'creditAuto' $script:CFG.creditAuto $skin
+  Add-QmSettingsHeading $body '账户积分与权益' $skin
+  Add-QmSettingsCheck $body '发现可领权益时自动领取（每日积分与活动补给包）' 'creditAuto' $script:CFG.creditAuto $skin
   $status=New-QmText '' 11 $t.soft;$status.TextWrapping='Wrap';$status.Margin=[Windows.Thickness]::new(0,4,0,9);[void]$body.Children.Add($status);$script:QM_SETTINGS_CONTROLS['creditStatus']=$status
-  $actions=New-QmPanel $true;$claim=New-QmSettingsButton '立即领取' 'claim';[void]$actions.Children.Add($claim);$script:QM_SETTINGS_CONTROLS['claim']=$claim
-  [void]$actions.Children.Add((New-QmSettingsButton '查看领取日志' 'creditLogs'));[void]$body.Children.Add($actions)
-  $hint=New-QmText '每天 10:00（UTC+8）换周期；10:35 后补领，最多 3 次、间隔 30 分钟。已领取后本周期不再检查。' 10 $t.faint;$hint.TextWrapping='Wrap';$hint.Margin=[Windows.Thickness]::new(0,10,0,0);[void]$body.Children.Add($hint)
+  $actions=New-QmPanel $true;$claim=New-QmSettingsButton '立即领取全部' 'claim';[void]$actions.Children.Add($claim);$script:QM_SETTINGS_CONTROLS['claim']=$claim
+  [void]$actions.Children.Add((New-QmSettingsButton '领取记录' 'claims'));[void]$actions.Children.Add((New-QmSettingsButton '打开用量页' 'usagePage'));[void]$body.Children.Add($actions)
+  $hint=New-QmText '读取本机 Qoder 登录态，不保存密码；令牌仅用于官方接口认证。每天 10:00（UTC+8）换周期，余额与今日领取显示在状态条和悬停提示中。' 10 $t.faint;$hint.TextWrapping='Wrap';$hint.Margin=[Windows.Thickness]::new(0,10,0,0);[void]$body.Children.Add($hint)
   $w.Add_Closing({param($sender,$eventArgs) if(!$script:QM_SHUTDOWN -and $sender.Tag -ne 'dispose'){$eventArgs.Cancel=$true;$sender.Hide()}})
   return $w
  }finally{$script:QM_SETTINGS_BUILDING=$building}
@@ -123,9 +123,21 @@ function Sync-QmSettings {
    $control.IsChecked=switch($key){'follow'{!$script:CFG.pinned};'autostart'{Get-QmAutoStart};default{[bool]$script:CFG.$key}}
   }
   foreach($key in $script:CFG.display.Keys){if($script:QM_SETTINGS_CONTROLS['display.'+$key]){$script:QM_SETTINGS_CONTROLS['display.'+$key].IsChecked=$script:CFG.display[$key]}}
-  $cs=$script:CREDIT.Status
-  if($cs){$script:QM_SETTINGS_CONTROLS['creditStatus'].Text=(Format-QmCreditLabel $cs.State)+' · 周期 '+$cs.CampaignDay+"`n"+$cs.Reason+$(if($cs.At){"`n"+$cs.At}else{''})}
-  $script:QM_SETTINGS_CONTROLS['claim'].IsEnabled=(!$script:CREDIT.Running -and (!$cs -or $cs.State -ne 'claimed'))
+  $s=Get-QmAccountStatus
+  $acctLines=New-Object System.Collections.Generic.List[string]
+  if($s.State -eq 'noauth'){$acctLines.Add('未登录：'+$s.Message)}
+  elseif($s.State -eq 'error'){$acctLines.Add('账号读取失败：'+$s.Message)}
+  elseif($s.State -eq 'ok'){
+   $acctLines.Add('账户：'+$(if($s.Name){$s.Name+' · '}else{''})+$(if($s.Plan){$s.Plan}else{'—'})+$(if($s.PlanExpiresAt){'（'+(Format-QmExpiry $s.PlanExpiresAt)+' 到期）'}else{''}))
+   $acctLines.Add('余额 '+(Format-QmNum $s.Balance)+'（'+(Format-QmBalanceDetail $s)+'）')
+   foreach($p in $s.Packages){$acctLines.Add('· '+$p.Title+' '+(Format-QmNum $p.Remaining)+'/'+(Format-QmNum $p.Total)+$(if($p.ExpiresAt){' · '+(Format-QmExpiry $p.ExpiresAt)+' 到期'}else{''}))}
+  }else{$acctLines.Add('正在读取账户…')}
+  if($s.TodayCount -gt 0){$acctLines.Add('今日领取：+'+(Format-QmNum $s.TodayAmount)+' · '+$s.TodayCount+' 项')}else{$acctLines.Add('今日领取：+0')}
+  foreach($e in @($s.TodayItems|Select-Object -Last 3)){$acctLines.Add('· '+$e.title+' +'+(Format-QmNum ([long]$e.amount)))}
+  if($s.Claimable.Count -gt 0){$acctLines.Add('待领取：'+$s.Claimable.Count+' 项')}
+  if($s.Message -and $s.State -notin @('noauth','error')){$acctLines.Add('状态：'+$s.Message)}
+  $script:QM_SETTINGS_CONTROLS['creditStatus'].Text=$acctLines -join "`n"
+  $claimBtn=$script:QM_SETTINGS_CONTROLS['claim'];$claimBtn.IsEnabled=(-not $script:ACCOUNT.Running);$claimBtn.Content=$(if($script:ACCOUNT.Running){'领取中…'}else{'立即领取全部'})
   $up=$null;if(Get-Command Get-QmUpdateStatus -ErrorAction SilentlyContinue){$up=Get-QmUpdateStatus}
   $button=$script:QM_SETTINGS_CONTROLS['update'];$button.Content='检查更新';$button.Tag=@{Command='update';Value=''};$button.IsEnabled=($up.State -ne 'checking')
   $script:QM_SETTINGS_CONTROLS['updateText'].Text=[string]$up.Text

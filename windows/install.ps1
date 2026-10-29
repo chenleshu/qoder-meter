@@ -29,6 +29,12 @@ foreach ($f in Get-ChildItem -Path (Join-Path $root 'src') -Filter '*.ps1' -File
   $copied++
   Write-Output ("  + src\" + $f.Name)
 }
+# 1.4.0 起余额与领取内置到 lib-account；移除旧版外部领取模块，避免残留误读。
+$legacy = Join-Path $srcDir 'lib-credits.ps1'
+if (Test-Path -LiteralPath $legacy) {
+  Remove-Item -LiteralPath $legacy -Force
+  Write-Output '  - src\lib-credits.ps1（旧版领取模块已废弃）'
+}
 if (Test-Path (Join-Path $root 'README.md')) {
   Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination (Join-Path $appDir 'README.md') -Force
 }

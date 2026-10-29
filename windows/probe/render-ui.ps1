@@ -2,7 +2,7 @@
 param([string]$OutputDirectory=(Join-Path (Split-Path $PSScriptRoot -Parent) '.build'))
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
-foreach($name in @('lib-interop','lib-data','lib-credits','lib-ui','lib-config-layout','lib-settings')){. (Join-Path $root ('src\'+$name+'.ps1'))}
+foreach($name in @('lib-interop','lib-data','lib-account','lib-ui','lib-config-layout','lib-settings')){. (Join-Path $root ('src\'+$name+'.ps1'))}
 $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'src\meter.ps1'),[ref]$tokens,[ref]$errors)
 foreach($fn in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)){. ([scriptblock]::Create($fn.Extent.Text))}
 function Get-QmAutoStart {return $false}
@@ -16,9 +16,17 @@ function Save-View($element,[double]$width,[double]$height,[string]$name){
  try{$encoder.Save($stream)}finally{$stream.Dispose()};Write-Output $path
 }
 if(!(Test-Path -LiteralPath $OutputDirectory)){throw 'Output directory must already exist.'}
-$script:QM_VERSION='1.4.0-win.2';$script:QM_SHUTDOWN=$true
+$script:QM_VERSION='1.4.0-win.3';$script:QM_SHUTDOWN=$true
 $script:CFG=New-QmConfig;$script:CFG.skin='paper'
-$script:CREDIT=@{Running=$false;Status=[pscustomobject]@{State='claimed';CampaignDay='2026-10-27';At='10:05';Reason='测试展示：本周期已领取'}}
+$script:QM_CLAIMS_PATH=Join-Path $OutputDirectory 'claims-fixture.json';$script:QM_CLAIMS=$null
+$script:ACCOUNT=@{
+ Auth=[pscustomobject]@{Name='示例账户';Email='demo@example.com';UserId='demo';Error=''}
+ Usage=[pscustomobject]@{Plan='personal_professional';ExpiresAt=[DateTimeOffset]::UtcNow.AddDays(20).ToUnixTimeMilliseconds();PlanTotal=2000;PlanUsed=1666;PlanRemaining=334;AddOnTotal=3400;AddOnUsed=2100;AddOnRemaining=1300
+  Packages=@([pscustomobject]@{Name='act-demo';Title='SOTA 算力补给包';Description='SOTA 专属';Total=4096;Used=0;Remaining=4096;ExpiresAt=[DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeMilliseconds();Available=$true;Status='active'})}
+ Campaigns=@();Running=$false;Error='';UsageAt=1L;CampAt=1L;NextTry=0L;LastFail=@{};Notified=$null;At=''
+}
+$script:QM_CLAIMS=[pscustomobject]@{Version=1;Entries=(New-Object System.Collections.Generic.List[object])}
+$script:QM_CLAIMS.Entries.Add([pscustomobject]@{campaignId='demo-sota';campaignKey='demo';day=(Get-QmCampaignDay);title='SOTA 算力补给包';amount=4096;kind='CREDITS';scope='C_S_U_SERIES';claimedAt=(Get-QmCstNow).ToString('s');expiresAt='';replayed=$false})
 $script:QM_S.sessionId='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';$script:QM_S.title='状态条视觉测试（示例数据）';$script:QM_S.model='test-model'
 $script:QM_S.recent=@([pscustomobject]@{session_id=$script:QM_S.sessionId;title=$script:QM_S.title})
 $script:QM_S.tps=132.6;$script:QM_S.tpsHistory=@(30,40,50,80,50,60,70,95,100,80,110,120,128,132)

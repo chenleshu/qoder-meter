@@ -6,7 +6,8 @@ function Check($ok,$name){if($ok){$script:pass++;Write-Output "PASS $name"}else{
 if($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1){throw 'Run with Windows PowerShell 5.1.'}
 if([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA'){throw 'Run with -STA.'}
 Write-Output ('PowerShell '+$PSVersionTable.PSVersion+' STA')
-foreach($name in @('lib-config-layout','lib-ui','lib-lifecycle','lib-settings')){. (Join-Path $root ('src\'+$name+'.ps1'))}
+$script:QM_SETTINGSD=Join-Path ([IO.Path]::GetTempPath()) ('qm-settings-dir-'+[guid]::NewGuid().ToString('N'))
+foreach($name in @('lib-config-layout','lib-ui','lib-lifecycle','lib-settings','lib-account')){. (Join-Path $root ('src\'+$name+'.ps1'))}
 # Load the real text formatter without initializing the database/data layer.
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'src\lib-data.ps1'),[ref]$tokens,[ref]$errors)
@@ -15,8 +16,10 @@ $formatter=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionD
 . ([scriptblock]::Create($formatter.Extent.Text))
 $script:CFG_PATH=Join-Path ([IO.Path]::GetTempPath()) ('qm-settings-'+[guid]::NewGuid().ToString('N')+'.json')
 $script:QM_LC_STATE_DIR=Split-Path $script:CFG_PATH -Parent
-$script:QM_VERSION='1.4.0-win.2';$script:QM_SHUTDOWN=$false
-$script:UI=@{settings=$null;skin='paper'};$script:CREDIT=@{Status=$null;Running=$false}
+$script:QM_VERSION='1.4.0-win.3';$script:QM_SHUTDOWN=$false
+$script:UI=@{settings=$null;skin='paper'}
+$script:QM_CLAIMS_PATH=Join-Path $script:QM_SETTINGSD 'claims.json';$script:QM_CLAIMS=$null
+$script:ACCOUNT=@{Auth=$null;Usage=$null;Campaigns=$null;Running=$false;Error='';UsageAt=0L;CampAt=0L;NextTry=0L;LastFail=@{};Notified=$null;At=''}
 $script:Commands=[Collections.Generic.List[object]]::new()
 # Only the command router is mocked. Real WPF events still dispatch their actual payloads.
 # Never load meter.ps1 or start an update/credit request. All saves target this temporary file.

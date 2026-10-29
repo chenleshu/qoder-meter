@@ -334,7 +334,7 @@ let latencyValue = null;
 let stateLabel = null;
 let sparkBars = [];
 let dragView = null;
-let metricsLabel = null;
+let metricLabels = {};
 let indicatorPanel = null;
 let statusItem = null;
 let controller = null;
@@ -1512,7 +1512,7 @@ function resetUI() {
   stateLabel = null;
   sparkBars = [];
   dragView = null;
-  metricsLabel = null;
+  metricLabels = {};
   statsPillBox = null;
   statsIconView = null;
   statsButtonRect = null;
@@ -1603,21 +1603,34 @@ function buildSidebar(root) {
   addGearButton(root, W - 30, 3, 13, T.gray);
 }
 
-function metricSampleWidth(mode, regFont, medFont) {
-  let w = 0;
-  let first = true;
-  const add = function (text, font) { w += textWidth(text, font); };
-  const sep = function () {
-    if (!first) add('  ·  ', regFont);
-    first = false;
-  };
-  if (state.display.turn) { sep(); add('本轮 ', regFont); add('88m 88s', medFont); }
-  if (state.display.age) { sep(); add('总计 ', regFont); add('888h 88m', medFont); }
-  if (state.display.token) { sep(); add('Token ', regFont); add(tokenUnitSample(), medFont); }
-  if (state.display.credits) { sep(); add('积分 ', regFont); add('888.88', medFont); }
-  if (state.display.requests) { sep(); add('8888 请求', regFont); }
-  if (state.display.tools) { sep(); add('工具 8.8k', regFont); }
-  return w;
+// AppKit points match Windows DIPs: a 1pt rule with 4pt padding on each side.
+// Keep the reserved span and the rendered geometry together (only height scales).
+function barSeparatorGeometry(S) {
+  const width = 1;
+  const padding = 4;
+  return { width: width, padding: padding, span: width + padding * 2, height: 12 * S };
+}
+
+function barMetricParts(turnText, ageText, outText, creditsText, requestsText, toolsText) {
+  return [
+    { id: 'turn', parts: [['本轮 ', 'faint'], [turnText, 'text', true]] },
+    { id: 'age', parts: [['总计 ', 'faint'], [ageText, 'text', true]] },
+    { id: 'token', parts: [['Token ', 'faint'], [outText, 'soft', true]] },
+    { id: 'credits', parts: [['积分 ', 'faint'], [creditsText, 'gold', true]] },
+    { id: 'requests', parts: [[requestsText + ' 请求', 'soft']] },
+    { id: 'tools', parts: [['工具 ' + toolsText, 'soft']] }
+  ];
+}
+
+function metricSampleFields(regFont, medFont) {
+  return barMetricParts('88m 88s', '888h 88m', tokenUnitSample(), '888.88', '8888', '8.8k')
+    .filter(function (field) { return !!state.display[field.id]; })
+    .map(function (field) {
+      // NSTextField has a 2pt text inset at either end. Separators stay outside it.
+      let w = 4;
+      field.parts.forEach(function (part) { w += textWidth(part[0], part[2] ? medFont : regFont); });
+      return { id: field.id, w: Math.ceil(w), metric: true };
+    });
 }
 
 function computeBarLayout(mode) {
@@ -1634,7 +1647,7 @@ function computeBarLayout(mode) {
   const padL = Math.round(10 * S);
   const dotHalo = Math.round(14 * S);
   const dotGap = Math.round(7 * S);
-  const fieldGap = Math.round(10 * S);
+  const separator = barSeparatorGeometry(S);
   const pillGap = Math.round(8 * S);
   const rightPad = Math.round(9 * S);
   const gearSize = Math.max(11, Math.round(13 * S));
@@ -1651,26 +1664,24 @@ function computeBarLayout(mode) {
   const tpsGap = Math.round(3 * S);
   const tpsBlock = tpsLabelW + tpsGap + tpsValueW;
 
-  const showTitle = mode !== 'title' && !!state.display.title;
-  const titleW = showTitle ? Math.round(160 * S) : 0;
-  const titleBlock = showTitle ? titleW + Math.round(6 * S) + 1 + Math.round(8 * S) : 0;
+  const latencyTextW = textWidth('延迟 88.8s', pillFont);
+  const statusTextW = textWidth('生成中 88.8s', pillFont);
+  const latencyPillW = latencyTextW + pillPad * 2;
+  const statusPillW = statusTextW + pillPad * 2;
+  let fields = [];
+  if (mode !== 'title' && state.display.title) fields.push({ id: 'title', w: Math.round(160 * S) });
+  if (state.display.tps) fields.push({ id: 'tps', w: tpsBlock });
+  fields = fields.concat(metricSampleFields(metricsReg, metricsMed));
+  if (state.display.latency) fields.push({ id: 'latency', w: latencyPillW, pill: true });
+  if (state.display.status) fields.push({ id: 'status', w: statusPillW, pill: true });
 
-  const showMetrics = ['turn', 'age', 'token', 'credits', 'requests', 'tools']
-    .some(function (id) { return !!state.display[id]; });
-  const metricsNeed = showMetrics ? metricSampleWidth(mode, metricsReg, metricsMed) : 0;
-
-  const showLatency = !!state.display.latency;
-  const showStatus = !!state.display.status;
-  const latencyTextW = showLatency ? textWidth('延迟 88.8s', pillFont) : 0;
-  const statusTextW = showStatus ? textWidth('生成中 88.8s', pillFont) : 0;
-  const latencyPillW = showLatency ? latencyTextW + pillPad * 2 : 0;
-  const statusPillW = showStatus ? statusTextW + pillPad * 2 : 0;
-
-  const left = padL + dotHalo + dotGap + titleBlock + (state.display.tps ? tpsBlock : 0);
-  const right = statsPill + statsGap + gearPill + rightPad +
-    (showStatus ? statusPillW + pillGap : 0) +
-    (showLatency ? latencyPillW + pillGap : 0);
-  let W = left + fieldGap + right + (showMetrics ? metricsNeed : 0);
+  const fieldsWidth = function () {
+    return fields.reduce(function (sum, field) { return sum + field.w; }, 0) +
+      Math.max(0, fields.length - 1) * separator.span;
+  };
+  const left = padL + dotHalo + dotGap;
+  const right = statsPill + statsGap + gearPill + rightPad;
+  let W = left + fieldsWidth() + (fields.length ? pillGap : 0) + right;
 
   const b = state.windowBounds;
   let maxW;
@@ -1683,34 +1694,62 @@ function computeBarLayout(mode) {
   }
   W = Math.max(Math.round(220 * S), Math.round(Math.min(W, maxW)));
 
-  let cursor = padL + dotHalo + dotGap;
-  const titleX = cursor;
-  if (showTitle) cursor += titleBlock;
-  const dividerX = showTitle ? titleX + titleW + Math.round(6 * S) : 0;
-  const tpsX = cursor;
-  const tpsLabelX = tpsX;
-  const tpsValueX = tpsX + tpsLabelW + tpsGap;
-  if (state.display.tps) cursor += tpsBlock;
-  const metricsX = cursor;
-
   const gearX = W - rightPad - gearPill;
   const statsX = gearX - statsGap - statsPill;
-  const statusPillX = showStatus ? (statsX - pillGap - statusPillW) : statsX;
-  const latencyPillX = showLatency ?
-    ((showStatus ? statusPillX : statsX) - pillGap - latencyPillW) : 0;
-  const rightStart = showLatency ? latencyPillX : (showStatus ? statusPillX : statsX);
-  const metricsW = Math.max(0, rightStart - fieldGap - metricsX);
+  const budget = Math.max(0, statsX - pillGap - left);
+  // Preserve the existing left/title/TPS and right/pill priorities. Omit complete
+  // metric fields from the end, rather than clipping through a separator. Only
+  // sacrifice fixed fields when even they cannot fit in a narrow inline bar.
+  const trimOrder = ['tools', 'requests', 'credits', 'token', 'age', 'turn',
+    'title', 'tps', 'latency', 'status'];
+  for (let i = 0; i < trimOrder.length && fieldsWidth() > budget; i++) {
+    const index = fields.findIndex(function (field) { return field.id === trimOrder[i]; });
+    if (index < 0) continue;
+    if (trimOrder[i] === 'title') {
+      fields[index].w = Math.max(Math.round(48 * S), fields[index].w - (fieldsWidth() - budget));
+      if (fieldsWidth() <= budget) break;
+    }
+    fields.splice(index, 1);
+  }
+
+  let cursor = left;
+  let pillCursor = statsX - pillGap;
+  for (let i = fields.length - 1; i >= 0; i--) {
+    if (!fields[i].pill) continue;
+    fields[i].x = pillCursor - fields[i].w;
+    pillCursor = fields[i].x - separator.span;
+  }
+  fields.forEach(function (field) {
+    if (field.pill) return;
+    field.x = cursor;
+    cursor += field.w + separator.span;
+  });
+  const get = function (id) {
+    return fields.filter(function (field) { return field.id === id; })[0];
+  };
+  const title = get('title');
+  const tps = get('tps');
+  const latency = get('latency');
+  const status = get('status');
+  const metrics = fields.filter(function (field) { return field.metric; });
+  // Only adjacent, actually rendered logical fields get a rule. The activity
+  // dot and action buttons are not fields; never leave a rule at either end.
+  const separators = fields.slice(1).map(function (field) {
+    return { x: field.x - separator.padding - separator.width,
+      y: (H - separator.height) / 2, w: separator.width, h: separator.height };
+  });
 
   return {
-    S, W, H, baseY,
+    S, W, H, baseY, fields, separator, separators, metrics,
     titleFont, tpsLabelFont, tpsValueFont, metricsSize, metricsReg, metricsMed,
     pillFont, pillSize, pillH, pillPad,
     padL, dotX: padL, dotHalo, dotGap,
-    showTitle, titleX, titleW, dividerX,
-    showTps: !!state.display.tps, tpsLabelX, tpsValueX, tpsLabelW, tpsValueW,
-    showMetrics, metricsX, metricsW,
-    showLatency, latencyPillX, latencyPillW, latencyTextW,
-    showStatus, statusPillX, statusPillW, statusTextW,
+    showTitle: !!title, titleX: title ? title.x : 0, titleW: title ? title.w : 0,
+    showTps: !!tps, tpsLabelX: tps ? tps.x : 0,
+    tpsValueX: tps ? tps.x + tpsLabelW + tpsGap : 0, tpsLabelW, tpsValueW,
+    showMetrics: metrics.length > 0,
+    showLatency: !!latency, latencyPillX: latency ? latency.x : 0, latencyPillW, latencyTextW,
+    showStatus: !!status, statusPillX: status ? status.x : 0, statusPillW, statusTextW,
     statsX, statsSize, statsPill,
     gearX, gearSize, gearPill
   };
@@ -1736,8 +1775,6 @@ function buildBar(root, mode, L) {
     titleLabel = label('', [L.titleX, L.baseY, L.titleW, Math.round(16 * S)],
       11.5 * S, T.text, $.NSFontWeightMedium, 0, true);
     root.addSubview(titleLabel);
-    root.addSubview(box([L.dividerX, Math.round(9 * S), 1, Math.round(16 * S)],
-      T.divider, 0, 0, null));
   }
 
   if (L.showTps) {
@@ -1748,11 +1785,12 @@ function buildBar(root, mode, L) {
     root.addSubview(tpsValue);
   }
 
-  if (L.showMetrics) {
-    metricsLabel = label('', [L.metricsX, L.baseY, Math.max(10, L.metricsW),
-      Math.round(16 * S)], L.metricsSize, T.soft, $.NSFontWeightRegular, 0, true);
-    root.addSubview(metricsLabel);
-  }
+  L.metrics.forEach(function (field) {
+    const view = label('', [field.x, L.baseY, field.w, Math.round(16 * S)],
+      L.metricsSize, T.soft, $.NSFontWeightRegular, 0, true);
+    metricLabels[field.id] = view;
+    root.addSubview(view);
+  });
 
   const pillY = Math.round((H - L.pillH) / 2);
   if (L.showLatency) {
@@ -1773,6 +1811,11 @@ function buildBar(root, mode, L) {
     root.addSubview(stateLabel);
   }
 
+  L.separators.forEach(function (line) {
+    root.addSubview(box([line.x, line.y, line.w, line.h],
+      T.gray.colorWithAlphaComponent(0.35), 0, 0, null));
+  });
+  setBarMetrics(L, '—', '—', '—', 0, 0, 0);
   addStatsButton(root, L.statsX, Math.round((H - L.statsPill) / 2), L.statsSize, T.gray);
   addGearButton(root, L.gearX, Math.round((H - L.gearPill) / 2), L.gearSize, T.gray);
 }
@@ -2001,53 +2044,22 @@ function updateSparkline() {
 }
 
 function setBarMetrics(L, turnText, ageText, outText, credits, requests, tools) {
-  if (!metricsLabel || !L) return;
-  const fontReg = L.metricsReg;
-  const fontMed = L.metricsMed;
-  const m = $.NSMutableAttributedString.alloc.init;
-  function add(text, color, font) {
-    if (!text) return;
-    const seg = $.NSMutableAttributedString.alloc.init;
-    seg.mutableString.setString(text);
-    const range = $.NSMakeRange(0, text.length);
-    seg.addAttributeValueRange($.NSForegroundColorAttributeName, color, range);
-    seg.addAttributeValueRange($.NSFontAttributeName, font, range);
-    m.appendAttributedString(seg);
-  }
-  let first = true;
-  const sep = function () {
-    if (!first) add('  ·  ', T.track, fontReg);
-    first = false;
-  };
-  if (state.display.turn) {
-    sep();
-    add('本轮 ', T.faint, fontReg);
-    add(turnText, T.text, fontMed);
-  }
-  if (state.display.age) {
-    sep();
-    add('总计 ', T.faint, fontReg);
-    add(ageText, T.text, fontMed);
-  }
-  if (state.display.token) {
-    sep();
-    add('Token ', T.faint, fontReg);
-    add(outText, T.soft, fontMed);
-  }
-  if (state.display.credits) {
-    sep();
-    add('积分 ', T.faint, fontReg);
-    add(fmtCredits(credits), T.gold, fontMed);
-  }
-  if (state.display.requests) {
-    sep();
-    add(fmtCount(requests) + ' 请求', T.soft, fontReg);
-  }
-  if (state.display.tools) {
-    sep();
-    add('工具 ' + fmtCount(tools), T.soft, fontReg);
-  }
-  metricsLabel.setAttributedStringValue(m);
+  if (!L) return;
+  barMetricParts(turnText, ageText, outText, fmtCredits(credits), fmtCount(requests), fmtCount(tools))
+    .forEach(function (field) {
+      const view = metricLabels[field.id];
+      if (!view) return; // Disabled or trimmed fields have neither a view nor a rule.
+      const text = $.NSMutableAttributedString.alloc.init;
+      field.parts.forEach(function (part) {
+        const seg = $.NSMutableAttributedString.alloc.init;
+        seg.mutableString.setString(part[0]);
+        const range = $.NSMakeRange(0, part[0].length);
+        seg.addAttributeValueRange($.NSForegroundColorAttributeName, T[part[1]], range);
+        seg.addAttributeValueRange($.NSFontAttributeName, part[2] ? L.metricsMed : L.metricsReg, range);
+        text.appendAttributedString(seg);
+      });
+      view.setAttributedStringValue(text);
+    });
 }
 
 function updateUI() {
@@ -2091,10 +2103,8 @@ function updateUI() {
     updateSparkline();
   } else {
     if (tpsValue) setText(tpsValue, tpsText);
-    if (metricsLabel) {
-      setBarMetrics(state.barLayout, turnText, ageText, outText,
-        state.credits, requestCount, toolCount);
-    }
+    setBarMetrics(state.barLayout, turnText, ageText, outText,
+      state.credits, requestCount, toolCount);
     if (latencyValue) {
       setText(latencyValue, '延迟 ' + latencyText);
       setColor(latencyValue, state.lastLatency ? T.gray : T.faint);

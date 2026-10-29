@@ -1,7 +1,7 @@
-﻿# Qoder Meter Windows. Local metrics are read-only; claims use the existing UI claimant.
+﻿# Qoder Meter Windows. 本机数据只读；账户余额与权益领取内置，无需外部脚本。
 param([switch]$NoTray,[string]$Pin='',[string]$Layout='',[switch]$AlwaysOn)
 $ErrorActionPreference='Stop'
-$script:QM_VERSION='1.4.0-win.2'
+$script:QM_VERSION='1.4.0-win.3'
 $root=Split-Path $PSScriptRoot -Parent
 trap {
  try{$d=Join-Path $env:APPDATA 'QoderMeter';[void][IO.Directory]::CreateDirectory($d);[IO.File]::AppendAllText((Join-Path $d 'meter.log'),(Get-Date -Format s)+' fatal '+$_.Exception.Message+' '+$_.ScriptStackTrace+"`r`n")}catch{}
@@ -9,16 +9,16 @@ trap {
 }
 . (Join-Path $PSScriptRoot 'lib-interop.ps1')
 try{if(![QoderMeter.Native]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))){[void][QoderMeter.Native]::SetProcessDpiAwarenessContext([IntPtr]::new(-1))}}catch{}
-foreach($lib in @('lib-data.ps1','lib-credits.ps1','lib-ui.ps1','lib-config-layout.ps1','lib-lifecycle.ps1','lib-settings.ps1')){. (Join-Path $PSScriptRoot $lib)}
+foreach($lib in @('lib-data.ps1','lib-ui.ps1','lib-account.ps1','lib-config-layout.ps1','lib-lifecycle.ps1','lib-settings.ps1')){. (Join-Path $PSScriptRoot $lib)}
 $script:QM_MUTEX=[Threading.Mutex]::new($false,'Local\QoderMeterWin_SingleInstance')
 try{$owned=$script:QM_MUTEX.WaitOne(0,$false)}catch [Threading.AbandonedMutexException]{$owned=$true}
 if(!$owned){exit 0}
 $script:CFG_PATH=Join-Path $script:QM_SETTINGSD 'settings.json'
 $script:CFG=Read-QmConfig
 if($Pin){$script:CFG.pinned=$Pin};if($script:QM_LAYOUT_NAMES.Contains($Layout)){$script:CFG.layout=$Layout}
-if($script:CFG.creditDir){Set-QmCreditBase $script:CFG.creditDir}
 $script:QM_S.pinned=$script:CFG.pinned
-$script:CREDIT=@{Status=$null;EvalDay='';Running=$false;LastAttempt=0L;LastRead=0L}
+$script:QM_AUTH=$null
+$script:ACCOUNT=@{Auth=$null;Usage=$null;Campaigns=$null;Running=$false;Error='';UsageAt=0L;CampAt=0L;NextTry=0L;LastFail=@{};Notified=$null;At=''}
 $script:UI=@{app=$null;win=$null;indicator=$null;settings=$null;tray=$null;sig='';skin='paper';visible=$false;dragging=$false;hoverAt=0L;tickNo=0;tick=$null;border=$null;region=$null;placement=$null;trayTip='';builds=0;manualExit=$false}
 $script:QM_SHUTDOWN=$false
 function Get-QmScale {return [double]$script:QM_FONT_SIZES[$script:CFG.fontSize]}
@@ -50,7 +50,9 @@ function Update-QmView {
  $out=if($s.exactOut -gt 0){Format-QmK $s.exactOut}elseif($s.estOut -gt 0){'≈'+(Format-QmK $s.estOut)}else{'—'}
  $turn=if($s.turnWall){Format-QmDuration $s.turnWall}else{'—'}
  $latency=if($s.lastLatency){Format-QmElapsed $s.lastLatency}else{'—'}
- $values=@{turn=$turn;age=$age;token=$out;credits=(Format-QmCredits $s.credits);requests=(Format-QmCount $s.requestCount);tools=(Format-QmCount $s.toolCount);latency=$latency}
+ $acct=Get-QmAccountStatus
+ $bal=if($acct.State -eq 'ok'){if($acct.Balance -gt 0){Format-QmK $acct.Balance}else{'0'}}else{'—'}
+ $values=@{turn=$turn;age=$age;token=$out;balance=$bal;credits=(Format-QmCredits $s.credits);requests=(Format-QmCount $s.requestCount);tools=(Format-QmCount $s.toolCount);latency=$latency}
  Set-QmTextValue $script:UI_TITLE $(if($s.sessionId){$s.title}else{'等待 Qoder 会话'})
  Set-QmTextValue $script:UI_TPS (Format-QmTps $s.tps)
  if($script:UI_TPS){$script:UI_TPS.Foreground=Get-QmBrush $(if($s.inFlight){$t.green}elseif($s.tps){$t.greenDim}else{$t.faint})}
@@ -59,9 +61,9 @@ function Update-QmView {
  if($script:UI_STATE_PILL){$script:UI_STATE_PILL.Background=Get-QmBrush $tint;$script:UI_STATUS.Foreground=Get-QmBrush $color}
  if($script:UI_DOT){$script:UI_DOT.Fill=Get-QmBrush $color};if($script:UI_HALO){$script:UI_HALO.Background=Get-QmBrush $tint}
  Set-QmTextValue $script:UI_FOOT ('延迟 '+$latency+' · '+$s.requestCount+' 请求 · '+$s.toolCount+' 工具')
- $cs=$script:CREDIT.Status;$claim=if($script:CREDIT.Running){'领取中'}elseif($cs){Format-QmCreditLabel $cs.State}else{'待检查'}
- $cc=if($cs -and $cs.State -eq 'claimed'){$t.green}elseif($cs -and $cs.State -eq 'failed'){$t.red}elseif($cs -and $cs.State -eq 'missed'){$t.gold}else{$t.gray}
- Set-QmTextValue $script:UI_CREDIT $(if($script:CFG.layout -eq 'sidebar'){'每日 Credits · '+$claim}else{'领取 · '+$claim})
+ $pill=Format-QmAccountPill;$claim=$pill.Text
+ $cc=switch($pill.Tone){'green'{$t.green};'gold'{$t.gold};'red'{$t.red};default{$t.gray}}
+ Set-QmTextValue $script:UI_CREDIT $claim
  if($script:UI_CREDIT){$script:UI_CREDIT.Foreground=Get-QmBrush $cc}
  if($script:UI_SPARK){
   $hist=@($s.tpsHistory|Select-Object -Last 14);$max=80.0;foreach($v in $hist){$max=[math]::Max($max,[double]$v)};$max=[math]::Min(300,$max)
@@ -77,10 +79,19 @@ function Update-QmView {
   ('输出 Token：'+$out+$(if($exact){'（'+$exact+'）'}else{''})+' · 积分：'+(Format-QmCredits $s.credits))
   ('请求：'+$s.requestCount+' · 工具：'+$s.toolCount+' · 延迟：'+$latency)
   ('积分/请求：'+$(if($s.requestCount -gt 0){Format-QmCredits ($s.credits/$s.requestCount)}else{'—'}))
-  ('每日 Credits：'+$claim)
  )
- if($cs){$tip+=('周期 '+$cs.CampaignDay+' · '+$cs.At);if($cs.Reason){$tip+=$cs.Reason}}
- $tip+='≈ 表示按字符估算；积分来自本地账单。'
+ if($acct.State -eq 'ok'){
+  $tip+=('账户：'+$(if($acct.Name){$acct.Name+' · '}else{''})+$acct.Plan+$(if($acct.PlanExpiresAt){'（'+(Format-QmExpiry $acct.PlanExpiresAt)+' 到期）'}else{''}))
+  $tip+=('积分余额：'+(Format-QmNum $acct.Balance)+'（'+(Format-QmBalanceDetail $acct)+'）')
+  foreach($p in $acct.Packages){$tip+=('活动积分：'+$p.Title+' '+(Format-QmNum $p.Remaining)+'/'+(Format-QmNum $p.Total)+$(if($p.ExpiresAt){' · '+(Format-QmExpiry $p.ExpiresAt)+' 到期'}else{''}))}
+ }elseif($acct.State -eq 'noauth'){$tip+='账户：未登录 Qoder'}
+ elseif($acct.State -eq 'error'){$tip+='账户：读取失败'}
+ else{$tip+='账户：正在读取…'}
+ if($acct.TodayCount -gt 0){$tip+=('今日领取：+'+(Format-QmNum $acct.TodayAmount)+' · '+$acct.TodayCount+' 项')}else{$tip+='今日领取：+0'}
+ foreach($e in @($acct.TodayItems|Select-Object -Last 3)){$tip+=('  · '+$e.title+' +'+(Format-QmNum ([long]$e.amount)))}
+ if($acct.Claimable.Count -gt 0){$tip+=('待领取：'+$acct.Claimable.Count+' 项')}
+ if($acct.Message){$tip+=('账户状态：'+$acct.Message)}
+ $tip+='≈ 表示按字符估算；本会话积分来自本地账单，余额来自 Qoder 账号。'
  if($s.error){$tip+=('诊断：'+$s.error)}
  $script:UI.border.ToolTip.Content=$tip -join "`n"
 }
@@ -147,8 +158,9 @@ function Invoke-QmCommand([string]$command,$value){
    'toggleHidden'{$script:CFG.panelHidden=!$script:CFG.panelHidden;$script:CFG.paused=$false;Save-QmConfig}
    'reset'{$script:CFG.positions[$script:CFG.layout]=@(0,0);Save-QmConfig}
    'refresh'{Refresh-QmData}
-   'claim'{$r=Start-QmCreditAttempt -Manual;if(!$r.Started){Show-QmBalloon '每日 Credits' $r.Message}}
-   'creditLogs'{if(Test-Path $script:QM_CREDIT_LOGDIR){Start-Process explorer.exe -ArgumentList ('"'+$script:QM_CREDIT_LOGDIR+'"')};return}
+   'claim'{$r=Invoke-QmAccountClaim;if(!$r.Claimed.Count -and $r.Message){Show-QmBalloon '账户权益' $r.Message}}
+   'claims'{Show-QmClaimHistory;return}
+   'usagePage'{Start-Process 'https://qoder.com/account/usage';return}
    'settingsDir'{Start-Process explorer.exe -ArgumentList ('"'+$script:QM_SETTINGSD+'"');return}
    'update'{[void](Start-QmUpdateCheck);Sync-QmSettings;return}
    'release'{
@@ -180,10 +192,13 @@ function New-QmTrayMenu {
  $sub=Add-QmMenu $m '外观' '' $null;for($i=0;$i -lt $script:QM_SKIN_IDS.Count;$i++){[void](Add-QmMenu $sub $script:QM_SKIN_NAMES[$i] 'set' @{Key='skin';Value=$script:QM_SKIN_IDS[$i]} ($script:CFG.skin -eq $script:QM_SKIN_IDS[$i]))}
  $sub=Add-QmMenu $m '显示内容' '' $null;foreach($k in $script:QM_FIELD_NAMES.Keys){[void](Add-QmMenu $sub $script:QM_FIELD_NAMES[$k] 'set' @{Key=('display.'+$k);Value=(!$script:CFG.display[$k])} $script:CFG.display[$k])}
  [void]$m.Items.Add([Windows.Forms.ToolStripSeparator]::new())
- $sub=Add-QmMenu $m '每日 Credits' '' $null
- $claim=Add-QmMenu $sub '立即领取' 'claim' $null;$claim.Enabled=(!$script:CREDIT.Running -and (!$script:CREDIT.Status -or $script:CREDIT.Status.State -ne 'claimed'))
- [void](Add-QmMenu $sub '自动补领' 'set' @{Key='creditAuto';Value=(!$script:CFG.creditAuto)} $script:CFG.creditAuto)
- [void](Add-QmMenu $sub '查看领取日志' 'creditLogs' $null)
+ $sub=Add-QmMenu $m '账户积分与领取' '' $null
+ $acct=Get-QmAccountStatus
+ $claim=Add-QmMenu $sub '立即领取全部' 'claim' $null;$claim.Enabled=(-not $script:ACCOUNT.Running)
+ [void](Add-QmMenu $sub '自动领取全部权益' 'set' @{Key='creditAuto';Value=(!$script:CFG.creditAuto)} $script:CFG.creditAuto)
+ [void](Add-QmMenu $sub '领取记录' 'claims' $null)
+ [void](Add-QmMenu $sub '打开 Qoder 用量页' 'usagePage' $null)
+ $info=Add-QmMenu $sub $(if($acct.State -eq 'ok'){'余额 '+(Format-QmNum $acct.Balance)+' · 今日 +'+(Format-QmNum $acct.TodayAmount)}else{'账户暂不可用'}) '' $null;$info.Enabled=$false
  [void](Add-QmMenu $m '随 Qoder 自动启动' 'set' @{Key='autostart';Value=(!(Get-QmAutoStart))} (Get-QmAutoStart))
  [void](Add-QmMenu $m 'Qoder 退出时关闭' 'set' @{Key='closeWithQoder';Value=(!$script:CFG.closeWithQoder)} $script:CFG.closeWithQoder)
  [void](Add-QmMenu $m '立即刷新' 'refresh' $null)
@@ -213,7 +228,7 @@ try{
  $timer.Add_Tick({
   try{
    $script:UI.tickNo++
-   if($script:UI.tickNo % 6 -eq 1){Refresh-QmData;Update-QmCreditState;Sync-QmSettings}
+   if($script:UI.tickNo % 6 -eq 1){Refresh-QmData;Update-QmAccountState;Sync-QmSettings}
    if(!$script:UI.dragging -and (Get-QmVisualSig) -ne $script:UI.sig){Reset-QmVisual}
    Update-QmView;Update-QmPlacement
    if($script:UI.tickNo % 10 -eq 0 -and $script:CFG.closeWithQoder){

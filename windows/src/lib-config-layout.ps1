@@ -1,10 +1,10 @@
 ﻿# Settings and pure physical-pixel docking geometry. No desktop side effects.
 function New-QmConfig {
  return [pscustomobject]@{
-  schemaVersion=2; layout='title';skin='auto';fontSize='normal';paused=$false;panelHidden=$false
-  closeWithQoder=$true;creditAuto=$true;creditDir='';creditAttemptDay='';creditAttempts=0;creditLastAttempt=0L
+  schemaVersion=3; layout='title';skin='auto';fontSize='normal';paused=$false;panelHidden=$false
+  closeWithQoder=$true;creditAuto=$true
   pinned='';bottomAutoHide=$true
-  display=[ordered]@{tps=$true;turn=$true;age=$true;token=$true;credits=$true;requests=$true;tools=$true;latency=$true;status=$true;title=$true;credit=$true}
+  display=[ordered]@{tps=$true;turn=$true;age=$true;token=$true;balance=$true;credits=$true;requests=$true;tools=$true;latency=$true;status=$true;title=$true;credit=$true}
   positions=[ordered]@{sidebar=@(0,0);title=@(0,0);toolbar=@(0,0);bottom=@(0,0)}
  }
 }
@@ -19,9 +19,8 @@ function Merge-QmConfig($source) {
    elseif($v -is [array] -and $v.Count -eq 2){try{$cfg.positions[$key]=@([double]$v[0],[double]$v[1])}catch{}}
   }
  }
- foreach($p in @('layout','skin','fontSize','creditDir','creditAttemptDay','pinned')) {if($null -ne $source.$p){$cfg.$p=[string]$source.$p}}
+ foreach($p in @('layout','skin','fontSize','pinned')) {if($null -ne $source.$p){$cfg.$p=[string]$source.$p}}
  foreach($p in @('paused','panelHidden','closeWithQoder','creditAuto','bottomAutoHide')) {if($source.$p -is [bool]){$cfg.$p=$source.$p}}
- foreach($p in @('creditAttempts','creditLastAttempt')) {try{if($null -ne $source.$p){$cfg.$p=[math]::Max(0,[long]$source.$p)}}catch{}}
  if($cfg.layout -eq 'top'){$cfg.layout='toolbar'}
  # Migrate the old obstructive default card into the user's title-bar position.
  if(!$source.schemaVersion -and $cfg.layout -eq 'sidebar'){$cfg.layout='title'}
