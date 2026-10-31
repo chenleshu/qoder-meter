@@ -8,7 +8,7 @@ if([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA'){throw 'Run this p
 $imports=[ordered]@{
  'lib-config-layout.ps1'=@('New-QmConfig')
  'lib-data.ps1'=@('Format-QmTps','Cut-QmText')
- 'lib-account.ps1'=@('Format-QmNum','Format-QmPlan','Get-QmCstNow','Get-QmCampaignDay','Get-QmClaims','Get-QmAccountStatus')
+ 'lib-account.ps1'=@('Format-QmNum','Format-QmPlan','Get-QmCstNow','Get-QmCampaignDay','Get-QmClaims','Get-QmClaimedTodayIds','Get-QmClaimableCampaigns','Get-QmAccountStatus')
  'meter.ps1'=@('Add-QmMenu','New-QmTrayMenu')
 }
 foreach($file in $imports.Keys){
@@ -177,11 +177,12 @@ try{
   $fields=(Find-MenuItem $menu '显示内容').DropDown
   $fieldSections=@($fields.Items|Where-Object Kind -eq 'section')
   Check (($fieldSections.Text -join '|') -eq '速度与时间|用量与账户|会话与活动') 'three display-field groups'
-  $fieldKeys=@('tps','turn','age','latency','token','credits','balance','credit','requests','tools','status','title')
+  $fieldKeys=@('tps','turn','age','latency','token','credits','credit','requests','tools','status','title')
   $fieldEntries=@($fields.Items|Where-Object {$_.Tag.Command -eq 'set'})
-  Check ($fieldEntries.Count -eq 12 -and (($fieldEntries|ForEach-Object {$_.Tag.Value.Key}) -join '|') -eq (($fieldKeys|ForEach-Object {'display.'+$_}) -join '|')) 'all twelve display fields in the intended group order'
-  for($i=0;$i -lt 3;$i++){Check ($fields.Items.IndexOf($fieldSections[$i]) -eq $i*5) ('four fields per group: '+$fieldSections[$i].Text)}
-  Check (@($fieldEntries|Where-Object {$_.Checked -and $_.Glyph -and $_.Tag.Value.Value -eq $false}).Count -eq 12) 'field icons and checks coexist; toggle values are inverse'
+  Check ($fieldEntries.Count -eq 11 -and (($fieldEntries|ForEach-Object {$_.Tag.Value.Key}) -join '|') -eq (($fieldKeys|ForEach-Object {'display.'+$_}) -join '|')) 'all eleven display fields in the intended group order'
+  $sectionAt=@(0,5,9)
+  for($i=0;$i -lt 3;$i++){Check ($fields.Items.IndexOf($fieldSections[$i]) -eq $sectionAt[$i]) ('field group position: '+$fieldSections[$i].Text)}
+  Check (@($fieldEntries|Where-Object {$_.Checked -and $_.Glyph -and $_.Tag.Value.Value -eq $false}).Count -eq 11) 'field icons and checks coexist; toggle values are inverse'
   $sessions=(Find-MenuItem $menu '选择并固定会话').DropDown
   Check ($sessions.Items[0].Text.Length -le 30 -and $sessions.Items[0].Text.EndsWith('…') -and $sessions.Items[0].ToolTipText -ceq $script:longTitle -and $sessions.Items[0].AccessibleName -ceq $script:longTitle -and $sessions.Items[0].AccessibilityObject.Name -ceq $script:longTitle) 'long session is abbreviated visually, full tooltip/accessibility preserved'
   Check ($sessions.Items[1].Text -eq '未命名会话') 'unnamed session fallback'

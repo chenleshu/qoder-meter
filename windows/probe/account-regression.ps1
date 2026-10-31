@@ -56,13 +56,14 @@ try{
  $script:ACCOUNT.UsageAt=5L;$script:ACCOUNT.CampAt=5L
  $script:Calls=New-Object System.Collections.Generic.List[object]
  function Invoke-QmApi([string]$method,[string]$path,[string]$body){
-  $script:Calls.Add([pscustomobject]@{Method=$method;Path=$path})
+  $script:Calls.Add([pscustomobject]@{Method=$method;Path=$path;Body=$body})
   $id=$path.Split('/')[-2]
   return [pscustomobject]@{status='CLAIMED';campaignId=$id;replayed=($id -eq 'c2');expiresAt=$null}
  }
  $r=Invoke-QmAccountClaim
  Check ($r.Claimed.Count -eq 2 -and $r.Failed.Count -eq 0 -and $script:Calls.Count -eq 2) 'claim posts once per claimable campaign'
  Check ($script:Calls[0].Method -eq 'Post' -and $script:Calls[0].Path -match '/me/campaigns/c1/claim$') 'claim uses the campaign claim endpoint'
+ Check ($script:Calls[0].Body -eq '{}') 'claim sends an empty JSON body the desktop client expects'
  Check ($script:ACCOUNT.Campaigns[0].ClaimStatus -eq 'CLAIMED' -and $script:ACCOUNT.Campaigns[1].ClaimStatus -eq 'CLAIMED') 'claimed campaigns are marked locally'
  Check ($script:ACCOUNT.UsageAt -eq 0 -and $script:ACCOUNT.CampAt -eq 0) 'a successful claim forces a balance refresh'
  Check ($script:Balloon[0] -eq '已领取 2 项权益' -and $script:Balloon[1] -match 'SOTA 补给 \(\+4,096（SOTA 专属）\)|SOTA 补给 \+4,096（SOTA 专属）') 'balloon names the claimed benefits'
@@ -71,11 +72,20 @@ try{
  $r=Invoke-QmAccountClaim
  Check (!$r.Claimed.Count -and $r.Message -eq '没有可领取的权益' -and $script:Calls.Count -eq 2) 'a second claim is a no-op'
 
+ # Campaigns already recorded today are never claimed twice, even if a fresh
+ # list still reports them as CLAIMABLE.
+ $script:ACCOUNT.Campaigns=@(
+  [pscustomobject]@{CampaignId='c1';CampaignKey='k1';Title='SOTA 补给';ActionType='CLAIM_BENEFIT';ClaimStatus='CLAIMABLE';Amount=4096;Kind='CREDITS';Scope='C_S_U_SERIES'},
+  [pscustomobject]@{CampaignId='d10';CampaignKey='kd10';Title='新权益';ActionType='CLAIM_BENEFIT';ClaimStatus='CLAIMABLE';Amount=75;Kind='CREDITS';Scope='ALL_MODELS'})
+ Check ((Get-QmAccountStatus).Claimable.Count -eq 1 -and (Get-QmAccountStatus).Claimable[0].CampaignId -eq 'd10') 'recorded campaigns are not offered again'
+ $r=Invoke-QmAccountClaim
+ Check ($r.Claimed.Count -eq 1 -and $r.Claimed[0].Title -eq '新权益' -and $script:Calls.Count -eq 3 -and $script:Calls[2].Path -match '/me/campaigns/d10/claim$') 'claim skips the campaign recorded today'
+
  # Auto claims respect a per-campaign cooldown.
  $script:ACCOUNT.Campaigns=@([pscustomobject]@{CampaignId='c9';CampaignKey='k9';Title='冷却中';ActionType='CLAIM_BENEFIT';ClaimStatus='CLAIMABLE';Amount=50;Kind='CREDITS';Scope='ALL_MODELS'})
  $script:ACCOUNT.LastFail=@{c9=(Get-QmCstNow).Ticks}
  $r=Invoke-QmAccountClaim -Auto
- Check (!$r.Claimed.Count -and $script:Calls.Count -eq 2 -and $script:ACCOUNT.LastFail.ContainsKey('c9')) 'auto claim skips a cooling campaign'
+ Check (!$r.Claimed.Count -and $script:Calls.Count -eq 3 -and $script:ACCOUNT.LastFail.ContainsKey('c9')) 'auto claim skips a cooling campaign'
  $script:ACCOUNT.LastFail=@{}
 
  # Network failures back off instead of retrying on every UI tick; success clears the gate.
@@ -142,6 +152,50 @@ try{
  Update-QmAccountState
  Check ($script:RefreshCalls.Count -eq ($reads+2) -and $script:RefreshCalls[$reads].Path -like '*/usage' -and $script:RefreshCalls[$reads+1].Path -like '*/campaigns' -and $script:ACCOUNT.CampAt -gt 0) 'next tick refreshes usage and campaigns after the mixed batch'
  $script:CFG.creditAuto=$false
+
+ # Local cache fallback: when the API answers with an empty list, reuse the
+ # campaign body Qoder cached so auto-claim still sees today's benefits.
+ Check (-not $script:QM_CAMPAIGN_CACHE_FALLBACK) 'cache fallback stays opt-in'
+ $fixtureProfile=Join-Path $temp 'profile'
+ $cacheDir=Join-Path $fixtureProfile 'Cache\Cache_Data'
+ [void][IO.Directory]::CreateDirectory($cacheDir)
+ $nowSec=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+ $fixture=[pscustomobject]@{showCampaign=$true;claimable=$true;campaigns=@(
+   [pscustomobject]@{campaignId='cache1';campaignKey='ck1';actionType='CLAIM_BENEFIT';claimStatus='CLAIMABLE';startAt=$nowSec-3600;endAt=$nowSec+7200;benefit=[pscustomobject]@{kind='CREDITS';amount=100;validity=[pscustomobject]@{mode='RELATIVE_DAYS';days=30};modelScope=[pscustomobject]@{modelSeries=[pscustomobject]@{key='ALL_MODELS'}}};placements=@([pscustomobject]@{type='POPUP';content=[pscustomobject]@{zh=[pscustomobject]@{title='每日 100 Credits';description='每日刷新'}}})},
+   [pscustomobject]@{campaignId='cache2';campaignKey='ck2';actionType='CLAIM_BENEFIT';claimStatus='CLAIMABLE';startAt=$nowSec-7200;endAt=$nowSec-60;benefit=[pscustomobject]@{kind='CREDITS';amount=50;validity=[pscustomobject]@{mode='RELATIVE_DAYS';days=1};modelScope=[pscustomobject]@{modelSeries=[pscustomobject]@{key='ALL_MODELS'}}};placements=@()},
+   [pscustomobject]@{campaignId='cache3';campaignKey='ck3';actionType='VIEW_DETAILS';claimStatus='CLAIMABLE';startAt=$nowSec-3600;endAt=$nowSec+7200;placements=@()})}
+ $fixtureText='prefix'+($fixture|ConvertTo-Json -Depth 12)+'suffix'
+ $latin=[Text.Encoding]::GetEncoding(28591)
+ $bytes=[Text.Encoding]::UTF8.GetBytes($fixtureText)
+ [IO.File]::WriteAllBytes((Join-Path $cacheDir 'data_1'),$bytes)
+ $parsed=ConvertFrom-QmCampaignCacheText $latin.GetString($bytes)
+ Check ($parsed -and @($parsed.campaigns).Count -eq 3) 'cache parser extracts the campaign body'
+ $mapped=ConvertTo-QmCampaign (@($parsed.campaigns)[0])
+ Check ($mapped.CampaignId -eq 'cache1' -and $mapped.Title -eq '每日 100 Credits' -and $mapped.Amount -eq 100 -and $mapped.Scope -eq 'ALL_MODELS') 'cache campaigns map to the API shape'
+ $script:QM_DB=Join-Path $fixtureProfile 'main.sqlite'
+ $script:QM_CACHE_CAMPAIGNS=$null
+ $cached=@(Get-QmCachedCampaigns)
+ Check ($cached.Count -eq 2 -and @($cached|Where-Object {$_.CampaignId -eq 'cache2'}).Count -eq 0) 'expired cache rows are filtered'
+ $script:QM_CAMPAIGN_CACHE_FALLBACK=$true
+ $script:QM_CACHE_CAMPAIGNS=$null
+ $list=@(Get-QmCampaignsNow)
+ Check ($list.Count -eq 1 -and $list[0].CampaignId -eq 'cache1') 'empty API list is completed from the Qoder cache'
+ Add-QmClaimRecord ([pscustomobject]@{CampaignId='cache1';CampaignKey='ck1';Title='每日 100 Credits';Amount=100;Kind='CREDITS';Scope='ALL_MODELS'}) ([pscustomobject]@{claimedAt='';expiresAt='';replayed=$false})
+ $script:QM_CACHE_CAMPAIGNS=$null
+ $list=@(Get-QmCampaignsNow)
+ Check (!($list|Where-Object {$_.CampaignId -eq 'cache1'})) 'already claimed cache rows are not re-offered'
+ # A non-empty live list is authoritative; stale cache rows must not be merged in.
+ $script:QM_CACHE_CAMPAIGNS=[pscustomobject]@{ReadAt=(Get-QmCstNow).Ticks;List=@([pscustomobject]@{CampaignId='cache4';CampaignKey='ck4';Title='旧缓存';ActionType='CLAIM_BENEFIT';ClaimStatus='CLAIMABLE';Amount=80;Kind='CREDITS';Scope='ALL_MODELS'})}
+ function Invoke-QmApi([string]$method,[string]$path,[string]$body){
+  if($path -like '*/campaigns'){return [pscustomobject]@{campaigns=@([pscustomobject]@{campaignId='live1';campaignKey='lk1';actionType='CLAIM_BENEFIT';claimStatus='CLAIMED';benefit=[pscustomobject]@{kind='CREDITS';amount=100};placements=@()})}}
+  return [pscustomobject]@{}
+ }
+ $list=@(Get-QmCampaignsNow)
+ Check ($list.Count -eq 1 -and $list[0].CampaignId -eq 'live1') 'a non-empty API list wins over the local cache'
+ $script:QM_CACHE_CAMPAIGNS=$null
+ $script:QM_CAMPAIGN_CACHE_FALLBACK=$false
+ $script:QM_DB=$null
+ $script:QM_CACHE_CAMPAIGNS=$null
 
  # History rotation keeps the newest entries.
  $script:QM_CLAIMS=$null

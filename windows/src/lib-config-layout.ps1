@@ -4,7 +4,7 @@ function New-QmConfig {
   schemaVersion=3; layout='title';skin='auto';fontSize='normal';paused=$false;panelHidden=$false
   closeWithQoder=$true;creditAuto=$true
   pinned='';bottomAutoHide=$true
-  display=[ordered]@{tps=$true;turn=$true;age=$true;token=$true;balance=$true;credits=$true;requests=$true;tools=$true;latency=$true;status=$true;title=$true;credit=$true}
+  display=[ordered]@{tps=$true;turn=$true;age=$true;token=$true;credits=$true;requests=$true;tools=$true;latency=$true;status=$true;title=$true;credit=$true}
   positions=[ordered]@{sidebar=@(0,0);title=@(0,0);toolbar=@(0,0);bottom=@(0,0)}
  }
 }

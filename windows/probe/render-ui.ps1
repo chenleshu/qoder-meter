@@ -58,7 +58,7 @@ try{
   foreach($layout in @('title','toolbar','bottom','sidebar')){
    $script:CFG.layout=$layout;$script:UI=@{skin=$skin;border=$null}
    if($layout -eq 'sidebar'){$view=Build-QmCard $script:CFG $skin 1;$width=246;$height=250}
-   else{$view=Build-QmBar $script:CFG $skin 1;$width=if($layout -eq 'title'){689}else{480};$height=30;$view.Height=$height}
+   else{$view=Build-QmBar $script:CFG $skin 1;$width=if($layout -eq 'title'){689}else{480};$height=26;$view.Height=$height}
    $script:UI.border=$view;$view.ToolTip=[Windows.Controls.ToolTip]::new();Update-QmView
    if($layout -ne 'sidebar'){Set-QmBarWidth $width;$width=$view.Width}
    Save-View $view $width $height ($layout+'-'+$skin)
@@ -68,5 +68,14 @@ try{
   Save-View $background 450 720 ('settings-'+$skin)
   $script:QM_SETTINGS_CONTROLS.scroll.ScrollToEnd();$background.UpdateLayout();Save-View $background 450 720 ('settings-bottom-'+$skin)
   $window.Close()
+  # Themed hover card, rendered from the same fixture without opening a popup.
+  $script:CFG.layout='title';$script:UI=@{skin=$skin;border=$null}
+  $bar=Build-QmBar $script:CFG $skin 1;$script:UI.border=$bar
+  $script:UI_TIP=New-QmTipCard $skin 1
+  Update-QmView
+  $card=$script:UI_TIP.Root
+  $card.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
+  $surface=[Windows.Controls.Border]::new();$surface.Background=Get-QmBrush $(if($skin -eq 'graphite'){'#FF15171C'}else{'#FFF2F4F8'});$surface.Child=$card
+  Save-View $surface ($card.Width+18) ([math]::Ceiling($card.DesiredSize.Height)) ('hover-'+$skin)
  }
 }finally{Close-QmDb}

@@ -7,6 +7,10 @@ $script:QM_ACCOUNT_READ_MS = 30000
 $script:QM_CAMPAIGN_READ_MS = 60000
 $script:QM_CLAIM_RETRY_MS = 900000
 $script:QM_AUTH_READ_MS = 300000
+$script:QM_CACHE_READ_MS = 300000
+# Qoder 桌面端在请求里带上 Cosy-ClientType；缺少它时活动接口会返回空列表，
+# 领取接口也会拒绝（500/409）。10 是桌面客户端的取值。
+$script:QM_CLIENT_TYPE = '10'
 $script:QM_API_BASE = 'https://openapi.qoder.sh'
 $script:QM_CLAIMS_PATH = Join-Path $script:QM_SETTINGSD 'claims.json'
 $script:QM_CLAIMS_MAX = 400
@@ -160,7 +164,7 @@ function ConvertFrom-QmApiError($err) {
 function Invoke-QmApi([string]$method, [string]$path, [string]$body) {
   $ProgressPreference = 'SilentlyContinue'
   $auth = Get-QmAuth
-  $headers = @{ 'Authorization' = 'Bearer ' + $auth.Token; 'Accept' = 'application/json'; 'User-Agent' = 'QoderMeter/1.0' }
+  $headers = @{ 'Authorization' = 'Bearer ' + $auth.Token; 'Accept' = 'application/json'; 'User-Agent' = 'QoderMeter/1.0'; 'Cosy-ClientType' = $script:QM_CLIENT_TYPE }
   try {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $args = @{ Uri = ($script:QM_API_BASE + $path); Method = $method; Headers = $headers; TimeoutSec = 8; UseBasicParsing = $true }
@@ -214,36 +218,155 @@ function Get-QmUsageNow {
   }
 }
 
+function ConvertTo-QmCampaign($x) {
+  if (-not $x -or -not $x.campaignId) { return $null }
+  $title = ''; $desc = ''
+  foreach ($pl in @($x.placements)) {
+    if (-not $pl) { continue }
+    $zh = $pl.content.'zh'
+    if (-not $zh -and $pl.content.'en') { $zh = $pl.content.'en' }
+    if ($zh) {
+      if (-not $title -and $zh.title) { $title = [string]$zh.title }
+      if (-not $desc -and $zh.description) { $desc = [string]$zh.description }
+    }
+  }
+  $benefit = $x.benefit
+  $scope = ''
+  try { $scope = [string]$benefit.modelScope.modelSeries.key } catch { }
+  return [pscustomobject]@{
+    CampaignId = [string]$x.campaignId; CampaignKey = [string]$x.campaignKey
+    Title = $title; Description = $desc; ActionType = [string]$x.actionType
+    ClaimStatus = [string]$x.claimStatus
+    Amount = if ($benefit.amount) { [long]$benefit.amount } else { 0 }
+    Kind = [string]$benefit.kind; Scope = $scope
+    Validity = if ($benefit.validity.mode) { [string]$benefit.validity.mode } else { '' }
+    FixedEnd = if ($benefit.validity.fixedEnd) { [string]$benefit.validity.fixedEnd } else { '' }
+    Days = if ($benefit.validity.days) { [int]$benefit.validity.days } else { 0 }
+    StartAt = [long]$x.startAt; EndAt = [long]$x.endAt
+  }
+}
+
 function Get-QmCampaignsNow {
   $c = Invoke-QmApi 'Get' '/sash/api/v1/me/campaigns' ''
   $list = New-Object System.Collections.Generic.List[object]
   foreach ($x in @($c.campaigns)) {
-    if (-not $x -or -not $x.campaignId) { continue }
-    $title = ''; $desc = ''
-    foreach ($pl in @($x.placements)) {
-      if (-not $pl) { continue }
-      $zh = $pl.content.'zh'
-      if ($zh) {
-        if (-not $title -and $zh.title) { $title = [string]$zh.title }
-        if (-not $desc -and $zh.description) { $desc = [string]$zh.description }
+    $item = ConvertTo-QmCampaign $x
+    if ($item) { $list.Add($item) }
+  }
+  # Qoder's webview also caches the campaign list. If the API answers with an
+  # empty list (older clients), fall back to that cache; when the API returns
+  # any campaigns its view wins, so a stale cache cannot resurrect a benefit
+  # that was already claimed.
+  if ($script:QM_CAMPAIGN_CACHE_FALLBACK -and $list.Count -eq 0) {
+    try {
+      $seen = @{}; foreach ($x in $list) { $seen[[string]$x.CampaignId] = $true }
+      $claimed = Get-QmClaimedTodayIds
+      foreach ($x in @(Get-QmCachedCampaigns)) {
+        if ($seen[[string]$x.CampaignId] -or $claimed[[string]$x.CampaignId]) { continue }
+        if ($x.ClaimStatus -ne 'CLAIMABLE' -or $x.ActionType -ne 'CLAIM_BENEFIT') { continue }
+        $list.Add($x); $seen[[string]$x.CampaignId] = $true
       }
-    }
-    $benefit = $x.benefit
-    $scope = ''
-    try { $scope = [string]$benefit.modelScope.modelSeries.key } catch { }
-    $list.Add([pscustomobject]@{
-      CampaignId = [string]$x.campaignId; CampaignKey = [string]$x.campaignKey
-      Title = $title; Description = $desc; ActionType = [string]$x.actionType
-      ClaimStatus = [string]$x.claimStatus
-      Amount = if ($benefit.amount) { [long]$benefit.amount } else { 0 }
-      Kind = [string]$benefit.kind; Scope = $scope
-      Validity = if ($benefit.validity.mode) { [string]$benefit.validity.mode } else { '' }
-      FixedEnd = if ($benefit.validity.fixedEnd) { [string]$benefit.validity.fixedEnd } else { '' }
-      Days = if ($benefit.validity.days) { [int]$benefit.validity.days } else { 0 }
-      StartAt = [long]$x.startAt; EndAt = [long]$x.endAt
-    })
+    } catch { }
   }
   return $list
+}
+
+# Read a Chromium cache file while Qoder holds it open (share read/write/delete).
+function Read-QmCacheText([string]$path) {
+  $fs = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]7))
+  try {
+    $ms = New-Object IO.MemoryStream
+    try { $fs.CopyTo($ms); $bytes = $ms.ToArray() } finally { $ms.Dispose() }
+  } finally { $fs.Dispose() }
+  return ([Text.Encoding]::GetEncoding(28591)).GetString($bytes)
+}
+
+# Extract the newest {"showCampaign":...,"campaigns":[...]} object from cache text.
+function ConvertFrom-QmCampaignCacheText([string]$text) {
+  if (-not $text) { return $null }
+  $latin = [Text.Encoding]::GetEncoding(28591)
+  $utf8 = New-Object Text.UTF8Encoding $false
+  $needle = '"showCampaign"'
+  $best = $null; $bestEnd = 0L; $pos = 0
+  while (($pos = $text.IndexOf($needle, $pos, [StringComparison]::Ordinal)) -ge 0) {
+    $start = $pos
+    while ($start -gt 0 -and $text[$start] -ne '{') { $start-- }
+    $depth = 0; $inStr = $false; $esc = $false; $end = -1
+    $limit = [Math]::Min($text.Length, $start + 400000)
+    for ($i = $start; $i -lt $limit; $i++) {
+      $ch = $text[$i]
+      if ($inStr) {
+        if ($esc) { $esc = $false }
+        elseif ($ch -eq '\') { $esc = $true }
+        elseif ($ch -eq '"') { $inStr = $false }
+        continue
+      }
+      if ($ch -eq '"') { $inStr = $true; continue }
+      if ($ch -eq '{') { $depth++ }
+      elseif ($ch -eq '}') { $depth--; if ($depth -eq 0) { $end = $i; break } }
+    }
+    if ($end -gt $start) {
+      try {
+        $json = $utf8.GetString($latin.GetBytes($text.Substring($start, $end - $start + 1)))
+        $obj = $json | ConvertFrom-Json
+      } catch { $obj = $null }
+      if ($obj -and $obj.campaigns -and @($obj.campaigns).Count -gt 0) {
+        $maxEnd = 0L
+        foreach ($c in @($obj.campaigns)) { if ([long]$c.endAt -gt $maxEnd) { $maxEnd = [long]$c.endAt } }
+        if (-not $best -or $maxEnd -gt $bestEnd) { $best = $obj; $bestEnd = $maxEnd }
+      }
+    }
+    $pos += $needle.Length
+  }
+  return $best
+}
+
+function Get-QmCachedCampaigns {
+  $now = (Get-QmCstNow).Ticks
+  $slot = $script:QM_CACHE_CAMPAIGNS
+  if ($slot -and ($now - [long]$slot.ReadAt) -lt ($script:QM_CACHE_READ_MS * 10000)) { return $slot.List }
+  $list = New-Object System.Collections.Generic.List[object]
+  $best = $null; $bestEnd = 0L
+  try {
+    $base = Split-Path $script:QM_DB -Parent
+    $cacheDir = Join-Path $base 'Cache\Cache_Data'
+    if (Test-Path -LiteralPath $cacheDir) {
+      foreach ($f in @(Get-ChildItem -LiteralPath $cacheDir -Filter 'data_*' -File -ErrorAction SilentlyContinue)) {
+        $text = $null
+        try { $text = Read-QmCacheText $f.FullName } catch { continue }
+        $obj = ConvertFrom-QmCampaignCacheText $text
+        if (-not $obj) { continue }
+        $maxEnd = 0L
+        foreach ($c in @($obj.campaigns)) { if ([long]$c.endAt -gt $maxEnd) { $maxEnd = [long]$c.endAt } }
+        if (-not $best -or $maxEnd -gt $bestEnd) { $best = $obj; $bestEnd = $maxEnd }
+      }
+    }
+  } catch { }
+  if ($best) {
+    $nowSec = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    foreach ($x in @($best.campaigns)) {
+      $item = ConvertTo-QmCampaign $x
+      if (-not $item) { continue }
+      # Drop entries whose window has passed; cached bodies can lag behind Qoder.
+      if ($item.StartAt -gt 0 -and $item.StartAt -gt ($nowSec + 300)) { continue }
+      if ($item.EndAt -gt 0 -and $item.EndAt -le $nowSec) { continue }
+      $list.Add($item)
+    }
+  }
+  $script:QM_CACHE_CAMPAIGNS = [pscustomobject]@{ ReadAt = $now; List = $list }
+  return $list
+}
+
+function Get-QmClaimedTodayIds {
+  $set = @{}
+  $day = Get-QmCampaignDay
+  foreach ($e in (Get-QmClaims).Entries) { if ([string]$e.day -eq $day) { $set[[string]$e.campaignId] = $true } }
+  return $set
+}
+
+function Get-QmClaimableCampaigns($campaigns) {
+  $claimed = Get-QmClaimedTodayIds
+  return @($campaigns | Where-Object { $_.ClaimStatus -eq 'CLAIMABLE' -and $_.ActionType -eq 'CLAIM_BENEFIT' -and -not $claimed[[string]$_.CampaignId] })
 }
 
 # ---------------------------------------------------------------- 领取记录
@@ -349,7 +472,7 @@ function Get-QmAccountStatus {
     $out.PackageRemaining = $pkgSum
     $out.Balance = $u.PlanRemaining + $u.AddOnRemaining + $pkgSum
   }
-  $out.Claimable = @($a.Campaigns | Where-Object { $_.ClaimStatus -eq 'CLAIMABLE' -and $_.ActionType -eq 'CLAIM_BENEFIT' })
+  $out.Claimable = @(Get-QmClaimableCampaigns $a.Campaigns)
   $day = Get-QmCampaignDay
   $items = New-Object System.Collections.Generic.List[object]
   foreach ($e in (Get-QmClaims).Entries) {
@@ -379,10 +502,11 @@ function Invoke-QmAccountClaim([switch]$Auto) {
   if ($acct.Running) { return [pscustomobject]@{ Claimed = @(); Failed = @(); Message = '上一次领取尚未结束' } }
   $done = New-Object System.Collections.Generic.List[object]
   $failed = New-Object System.Collections.Generic.List[object]
+  $firstFail = New-Object System.Collections.Generic.List[object]
   if ($null -eq $acct.Campaigns) {
     try { $acct.Campaigns = @(Get-QmCampaignsNow); $acct.CampAt = (Get-QmCstNow).Ticks } catch { return [pscustomobject]@{ Claimed = @(); Failed = @(); Message = $_.Exception.Message } }
   }
-  $targets = @($acct.Campaigns | Where-Object { $_.ClaimStatus -eq 'CLAIMABLE' -and $_.ActionType -eq 'CLAIM_BENEFIT' })
+  $targets = @(Get-QmClaimableCampaigns $acct.Campaigns)
   if (-not $targets.Count) { return [pscustomobject]@{ Claimed = @(); Failed = @(); Message = '没有可领取的权益' } }
   $attempted = $false
   $acct.Running = $true
@@ -394,7 +518,7 @@ function Invoke-QmAccountClaim([switch]$Auto) {
       }
       try {
         $attempted = $true
-        $r = Invoke-QmApi 'Post' ('/sash/api/v1/me/campaigns/' + [Uri]::EscapeDataString($c.CampaignId) + '/claim') ''
+        $r = Invoke-QmApi 'Post' ('/sash/api/v1/me/campaigns/' + [Uri]::EscapeDataString($c.CampaignId) + '/claim') '{}'
         if ($r -and $r.status -eq 'CLAIMED') {
           if (-not [long]$c.Amount -and $r.benefit.amount) { $c.Amount = [long]$r.benefit.amount }
           Add-QmClaimRecord $c $r
@@ -402,15 +526,21 @@ function Invoke-QmAccountClaim([switch]$Auto) {
           $c.ClaimStatus = 'CLAIMED'
           if ($acct.LastFail) { [void]$acct.LastFail.Remove($c.CampaignId) }
         } else {
+          $wasCooling = $acct.LastFail -and $acct.LastFail.ContainsKey($c.CampaignId)
           if (-not $acct.LastFail) { $acct.LastFail = @{} }
           $acct.LastFail[$c.CampaignId] = $now
+          if (-not $wasCooling) { $firstFail.Add([pscustomobject]@{ Title = $c.Title; Message = '未返回 CLAIMED' }) }
           $failed.Add([pscustomobject]@{ Title = $c.Title; Message = '未返回 CLAIMED' })
+          try { Write-QmLog ('claim: ' + $c.Title + ' 未返回 CLAIMED') } catch { }
         }
       } catch {
         $msg = $_.Exception.Message
+        $wasCooling = $acct.LastFail -and $acct.LastFail.ContainsKey($c.CampaignId)
         if (-not $acct.LastFail) { $acct.LastFail = @{} }
         $acct.LastFail[$c.CampaignId] = $now
+        if (-not $wasCooling) { $firstFail.Add([pscustomobject]@{ Title = $c.Title; Message = $msg }) }
         $failed.Add([pscustomobject]@{ Title = $c.Title; Message = $msg })
+        try { Write-QmLog ('claim: ' + $c.Title + ' ' + $msg) } catch { }
       }
     }
   } finally { $acct.Running = $false }
@@ -426,6 +556,12 @@ function Invoke-QmAccountClaim([switch]$Auto) {
     $text = $lines -join "`n"
     if ($text.Length -gt 240) { $text = $text.Substring(0, 237) + '…' }
     Show-QmBalloon ('已领取 ' + $done.Count + ' 项权益') $text
+  }
+  # Auto-claim must not fail silently: surface the first failure per campaign,
+  # then stay quiet during the retry cooldown.
+  if ($Auto -and $firstFail.Count -gt 0) {
+    $f = $firstFail[0]
+    Show-QmBalloon '自动领取失败' ($f.Title + '：' + $f.Message + "`n将在 15 分钟后重试")
   }
   if ($attempted) { $acct.CampAt = 0 }
   $msg = if ($done.Count) { '已领取 ' + $done.Count + ' 项' + $(if ($failed.Count) { '，' + $failed.Count + ' 项失败' } else { '' }) } elseif ($failed.Count) { '领取失败：' + $failed[0].Message } else { '没有可领取的权益' }
@@ -461,10 +597,10 @@ function Update-QmAccountState {
     }
   }
   if ($script:CFG.creditAuto -and -not $acct.Running) {
-    $targets = @($acct.Campaigns | Where-Object { $_.ClaimStatus -eq 'CLAIMABLE' -and $_.ActionType -eq 'CLAIM_BENEFIT' })
+    $targets = @(Get-QmClaimableCampaigns $acct.Campaigns)
     if ($targets.Count -gt 0) { [void](Invoke-QmAccountClaim -Auto) }
   } elseif (-not $script:CFG.creditAuto) {
-    $targets = @($acct.Campaigns | Where-Object { $_.ClaimStatus -eq 'CLAIMABLE' -and $_.ActionType -eq 'CLAIM_BENEFIT' })
+    $targets = @(Get-QmClaimableCampaigns $acct.Campaigns)
     if ($targets.Count -gt 0) {
       $fresh = @($targets | Where-Object { -not $acct.Notified -or -not $acct.Notified.ContainsKey($_.CampaignId) })
       if ($fresh.Count -gt 0) {

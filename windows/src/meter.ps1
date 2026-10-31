@@ -10,6 +10,8 @@ trap {
 . (Join-Path $PSScriptRoot 'lib-interop.ps1')
 try{if(![QoderMeter.Native]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))){[void][QoderMeter.Native]::SetProcessDpiAwarenessContext([IntPtr]::new(-1))}}catch{}
 foreach($lib in @('lib-data.ps1','lib-ui.ps1','lib-account.ps1','lib-config-layout.ps1','lib-lifecycle.ps1','lib-settings.ps1')){. (Join-Path $PSScriptRoot $lib)}
+# 官方 campaigns 接口对 Meter 可能返回空列表；允许从 Qoder 本地缓存补齐可领权益。
+$script:QM_CAMPAIGN_CACHE_FALLBACK=$true
 $script:QM_MUTEX=[Threading.Mutex]::new($false,'Local\QoderMeterWin_SingleInstance')
 try{$owned=$script:QM_MUTEX.WaitOne(0,$false)}catch [Threading.AbandonedMutexException]{$owned=$true}
 if(!$owned){exit 0}
@@ -35,8 +37,9 @@ function Reset-QmVisual {
   $w.Add_MouseRightButtonUp({param($sender,$eventArgs) Show-QmContextMenu;$eventArgs.Handled=$true})
   $w.Show();Set-QmNoActivate $w;$script:UI.visible=$true
  }else{$script:UI.win.Content=$null}
- $tip=[Windows.Controls.ToolTip]::new();$tip.MaxWidth=540;$tip.Content='等待 Qoder 会话';$el.ToolTip=$tip
- [Windows.Controls.ToolTipService]::SetInitialShowDelay($el,500);[Windows.Controls.ToolTipService]::SetShowDuration($el,60000)
+ $script:UI_TIP=New-QmTipCard $skin (Get-QmScale)
+ $el.ToolTip=New-QmTipHost $script:UI_TIP
+ [Windows.Controls.ToolTipService]::SetInitialShowDelay($el,450);[Windows.Controls.ToolTipService]::SetShowDuration($el,60000)
  $script:UI.win.Content=$el;$script:UI.border=$el;$script:UI.sig=Get-QmVisualSig;$script:UI.builds++
 }
 function Set-QmTextValue($obj,[string]$text){if($obj -and $obj.Text -ne $text){$obj.Text=$text}}
@@ -44,6 +47,8 @@ function Update-QmView {
  $s=$script:QM_S;$t=$script:QM_SKINS[$script:UI.skin];$now=QmNowMs
  $active=$s.lastEventAt -and ($now-$s.lastEventAt -lt 20000)
  $state=if($s.inFlight){'生成中 '+(Format-QmElapsed $s.inFlightElapsed)}elseif($active){'本轮中'}elseif($s.sessionId){'空闲'}else{'等待会话'}
+ # The bar capsule stays compact; elapsed time remains in the tooltip and 本轮.
+ $brief=if($s.inFlight){'生成中'}elseif($active){'本轮中'}elseif($s.sessionId){'空闲'}else{'等待会话'}
  $color=if($s.inFlight){$t.green}elseif($active){$t.gold}else{$t.gray};$tint=if($s.inFlight){$t.greenTint}elseif($active){$t.goldTint}else{$t.grayTint}
  if($s.turnStartedAt -and ($s.inFlight -or $active)){$s.turnWall=[math]::Max(0,($now-$s.turnStartedAt)/1000.0)}
  $age=if($s.sessionStartedAt){Format-QmDuration ([math]::Max(0,($now-$s.sessionStartedAt)/1000.0))}else{'—'}
@@ -51,13 +56,12 @@ function Update-QmView {
  $turn=if($s.turnWall){Format-QmDuration $s.turnWall}else{'—'}
  $latency=if($s.lastLatency){Format-QmElapsed $s.lastLatency}else{'—'}
  $acct=Get-QmAccountStatus
- $bal=if($acct.State -eq 'ok'){if($acct.Balance -gt 0){Format-QmK $acct.Balance}else{'0'}}else{'—'}
- $values=@{turn=$turn;age=$age;token=$out;balance=$bal;credits=(Format-QmCredits $s.credits);requests=(Format-QmCount $s.requestCount);tools=(Format-QmCount $s.toolCount);latency=$latency}
+ $values=@{turn=$turn;age=$age;token=$out;credits=(Format-QmCredits $s.credits);requests=(Format-QmCount $s.requestCount);tools=(Format-QmCount $s.toolCount);latency=$latency}
  Set-QmTextValue $script:UI_TITLE $(if($s.sessionId){$s.title}else{'等待 Qoder 会话'})
  Set-QmTextValue $script:UI_TPS (Format-QmTps $s.tps)
  if($script:UI_TPS){$script:UI_TPS.Foreground=Get-QmBrush $(if($s.inFlight){$t.green}elseif($s.tps){$t.greenDim}else{$t.faint})}
  foreach($k in $values.Keys){Set-QmTextValue $script:UI_SEGS[$k] $values[$k]}
- Set-QmTextValue $script:UI_STATUS $state
+ Set-QmTextValue $script:UI_STATUS $(if($script:CFG.layout -eq 'sidebar'){$state}else{$brief})
  if($script:UI_STATE_PILL){$script:UI_STATE_PILL.Background=Get-QmBrush $tint;$script:UI_STATUS.Foreground=Get-QmBrush $color}
  if($script:UI_DOT){$script:UI_DOT.Fill=Get-QmBrush $color};if($script:UI_HALO){$script:UI_HALO.Background=Get-QmBrush $tint}
  Set-QmTextValue $script:UI_FOOT ('延迟 '+$latency+' · '+$s.requestCount+' 请求 · '+$s.toolCount+' 工具')
@@ -69,31 +73,67 @@ function Update-QmView {
   $hist=@($s.tpsHistory|Select-Object -Last 14);$max=80.0;foreach($v in $hist){$max=[math]::Max($max,[double]$v)};$max=[math]::Min(300,$max)
   for($i=0;$i -lt 14;$i++){$rect=$script:UI_SPARK_RECTS[$i];$j=$i-(14-$hist.Count);$v=if($j -ge 0){[double]$hist[$j]}else{0};$rect.Height=if($v -gt 0){[math]::Min(26,[math]::Max(3,4+$v/$max*22))}else{1};$rect.Fill=Get-QmBrush $(if($j -eq $hist.Count-1 -and $hist.Count){$t.green}elseif($v){$t.greenDim}else{$t.track})}
  }
- $exact=if($s.exactOut -gt 0){'精确 '+([long]$s.exactOut)}elseif($s.estOut -gt 0){'估算 '+([QoderMeter.JsonEstimate]::Round($s.estOut)).ToString([Globalization.CultureInfo]::InvariantCulture)}else{''}
- $tip=@(
-  ('会话：'+$s.title)
-  ('模型：'+$s.model+' · '+$state)
-  ('本轮 TPS：'+(Format-QmTps $s.tps)+' tok/s')
-  ('本轮：'+$turn+' · 模型耗时：'+(Format-QmDuration $s.turnDuration))
-  ('总计：'+$age+' · '+$s.promptCount+' 轮')
-  ('输出 Token：'+$out+$(if($exact){'（'+$exact+'）'}else{''})+' · 积分：'+(Format-QmCredits $s.credits))
-  ('请求：'+$s.requestCount+' · 工具：'+$s.toolCount+' · 延迟：'+$latency)
-  ('积分/请求：'+$(if($s.requestCount -gt 0){Format-QmCredits ($s.credits/$s.requestCount)}else{'—'}))
- )
- if($acct.State -eq 'ok'){
-  $tip+=('账户：'+$(if($acct.Name){$acct.Name+' · '}else{''})+$acct.Plan+$(if($acct.PlanExpiresAt){'（'+(Format-QmExpiry $acct.PlanExpiresAt)+' 到期）'}else{''}))
-  $tip+=('积分余额：'+(Format-QmNum $acct.Balance)+'（'+(Format-QmBalanceDetail $acct)+'）')
-  foreach($p in $acct.Packages){$tip+=('活动积分：'+$p.Title+' '+(Format-QmNum $p.Remaining)+'/'+(Format-QmNum $p.Total)+$(if($p.ExpiresAt){' · '+(Format-QmExpiry $p.ExpiresAt)+' 到期'}else{''}))}
- }elseif($acct.State -eq 'noauth'){$tip+='账户：未登录 Qoder'}
- elseif($acct.State -eq 'error'){$tip+='账户：读取失败'}
- else{$tip+='账户：正在读取…'}
- if($acct.TodayCount -gt 0){$tip+=('今日领取：+'+(Format-QmNum $acct.TodayAmount)+' · '+$acct.TodayCount+' 项')}else{$tip+='今日领取：+0'}
- foreach($e in @($acct.TodayItems|Select-Object -Last 3)){$tip+=('  · '+$e.title+' +'+(Format-QmNum ([long]$e.amount)))}
- if($acct.Claimable.Count -gt 0){$tip+=('待领取：'+$acct.Claimable.Count+' 项')}
- if($acct.Message){$tip+=('账户状态：'+$acct.Message)}
- $tip+='≈ 表示按字符估算；本会话积分来自本地账单，余额来自 Qoder 账号。'
- if($s.error){$tip+=('诊断：'+$s.error)}
- $script:UI.border.ToolTip.Content=$tip -join "`n"
+ $exact=if($s.exactOut -gt 0){'精确输出 '+(Format-QmNum ([long]$s.exactOut))}else{''}
+ if($script:UI_SEGS['latency']){$script:UI_SEGS['latency'].Foreground=Get-QmBrush $(if(!$s.lastLatency){$t.faint}elseif($s.lastLatency -lt 15){$t.green}elseif($s.lastLatency -lt 30){$t.gold}else{$t.red})}
+ Update-QmTip $s $acct $state $color $tint $turn $age $out $latency $exact
+}
+function Update-QmTip($s,$acct,[string]$state,[string]$colorHex,[string]$tintHex,[string]$turn,[string]$age,[string]$out,[string]$latency,[string]$exact){
+ # Update the themed hover card in place; never rebuild it while the popup is open.
+ $tip=$script:UI_TIP;if(!$tip -or !$tip.Root){return}
+ $t=$script:QM_SKINS[$script:UI.skin]
+ Set-QmTextValue $tip.Title $(if($s.sessionId){$s.title}else{'等待 Qoder 会话'})
+ $tip.Dot.Fill=Get-QmBrush $colorHex
+ Set-QmTextValue $tip.State $state;$tip.State.Foreground=Get-QmBrush $colorHex;$tip.StatePill.Background=Get-QmBrush $tintHex
+ Set-QmTextValue $tip.Model ('模型 '+$s.model+' · '+$s.promptCount+' 轮 · 模型耗时 '+(Format-QmDuration $s.turnDuration))
+ Set-QmTextValue $tip.Tps (Format-QmTps $s.tps)
+ $tip.Tps.Foreground=Get-QmBrush $(if($s.inFlight){$t.green}elseif($s.tps){$t.greenDim}else{$t.faint})
+ Set-QmTextValue $tip.Turn $turn;Set-QmTextValue $tip.Age $age
+ Set-QmTextValue $tip.Token $out;Set-QmTextValue $tip.Credits (Format-QmCredits $s.credits)
+ Set-QmTextValue $tip.Latency $latency
+ $tip.Latency.Foreground=Get-QmBrush $(if(!$s.lastLatency){$t.faint}elseif($s.lastLatency -lt 15){$t.green}elseif($s.lastLatency -lt 30){$t.gold}else{$t.red})
+ $meta='请求 '+$s.requestCount+' · 工具 '+$s.toolCount+' · 积分/请求 '+$(if($s.requestCount -gt 0){Format-QmCredits ($s.credits/$s.requestCount)}else{'—'})
+ if($exact){$meta+=' · '+$exact}
+ Set-QmTextValue $tip.Meta $meta
+ $claimText='读取中';$claimTone='gray'
+ if($script:ACCOUNT -and $script:ACCOUNT.Running){$claimText='领取中…'}
+ elseif($acct.State -eq 'noauth'){$claimText='未登录'}
+ elseif($acct.State -eq 'error'){$claimText='账号异常';$claimTone='red'}
+ elseif($acct.Claimable.Count -gt 0){$claimText='待领 '+$acct.Claimable.Count+' 项';$claimTone='gold'}
+ elseif($acct.State -eq 'ok'){
+  if($acct.TodayCount -gt 0){$claimText='已领取';$claimTone='green'}else{$claimText='无待领'}
+ }
+ $tone=@{green=@($t.green,$t.greenTint);gold=@($t.gold,$t.goldTint);red=@($t.red,$t.grayTint);gray=@($t.gray,$t.grayTint)}[$claimTone]
+ Set-QmTextValue $tip.Claim $claimText;$tip.Claim.Foreground=Get-QmBrush $tone[0];$tip.ClaimPill.Background=Get-QmBrush $tone[1]
+ $ok=$acct.State -eq 'ok'
+ $tip.BalanceRow.Visibility=$(if($ok){'Visible'}else{'Collapsed'})
+ $tip.Break.Visibility=$(if($ok){'Visible'}else{'Collapsed'})
+ if($ok){
+  Set-QmTextValue $tip.Balance (Format-QmNum $acct.Balance)
+  $plan=$acct.Plan;if($acct.PlanExpiresAt){$plan+=' · '+(Format-QmExpiry $acct.PlanExpiresAt)+' 到期'}
+  if($acct.Name){$plan=$acct.Name+' · '+$plan}
+  Set-QmTextValue $tip.Plan $plan
+  Set-QmTextValue $tip.Break (Format-QmBalanceDetail $acct)
+  $pkgs=@($acct.Packages)
+  if($pkgs.Count){
+   $tip.Packages.Visibility='Visible'
+   Set-QmTextValue $tip.Packages (($pkgs|ForEach-Object{'活动积分 '+$_.Title+' '+(Format-QmNum $_.Remaining)+'/'+(Format-QmNum $_.Total)+$(if($_.ExpiresAt){' · '+(Format-QmExpiry $_.ExpiresAt)+' 到期'}else{''})}) -join "`n")
+  }else{$tip.Packages.Visibility='Collapsed'}
+ }else{
+  Set-QmTextValue $tip.Balance '';Set-QmTextValue $tip.Plan '';$tip.Packages.Visibility='Collapsed'
+ }
+ if($acct.TodayCount -gt 0){Set-QmTextValue $tip.Today ('今日已领 +'+(Format-QmNum $acct.TodayAmount)+' · '+$acct.TodayCount+' 项')}else{Set-QmTextValue $tip.Today '今日已领 +0'}
+ $items=@($acct.TodayItems|Select-Object -Last 3)
+ if($items.Count){
+  Set-QmTextValue $tip.TodayItems (($items|ForEach-Object{$_.title+' +'+(Format-QmNum ([long]$_.amount))}) -join ' · ');$tip.TodayItems.Visibility='Visible'
+ }else{$tip.TodayItems.Visibility='Collapsed'}
+ $msg=''
+ if(!$ok){
+  if($acct.State -eq 'noauth'){$msg='未检测到 Qoder 登录状态；登录后自动读取余额与权益。'}
+  elseif($acct.State -eq 'error'){$msg=$(if($acct.Message){$acct.Message}else{'读取失败，稍后自动重试。'})}
+  else{$msg='正在读取余额与权益…'}
+ }elseif($acct.Message){$msg=$acct.Message}
+ if($msg){$tip.Msg.Text=$msg;$tip.Msg.Visibility='Visible'}else{$tip.Msg.Visibility='Collapsed'}
+ if($s.error){$tip.Diag.Text='诊断：'+$s.error;$tip.Diag.Visibility='Visible'}else{$tip.Diag.Visibility='Collapsed'}
 }
 function Save-QmOffsetFromDrag {
  $r=$script:UI.region;$p=$script:UI.placement;if(!$r -or !$p){return}
@@ -116,7 +156,7 @@ function Update-QmPlacement {
  if($script:CFG.layout -ne 'sidebar'){
   $available=$region.W/$k
   if($available -lt 40){$script:UI.win.Hide();if($script:UI.indicator){$script:UI.indicator.Hide()};$script:UI.visible=$false;return}
-  Set-QmBarWidth $available;$script:UI_BAR.Height=[math]::Min(30*(Get-QmScale),$region.H/$k)
+  Set-QmBarWidth $available;$script:UI_BAR.Height=[math]::Min(26*(Get-QmScale),$region.H/$k)
  }
  $script:UI.win.UpdateLayout();$ww=$script:UI.win.ActualWidth*$k;$hh=$script:UI.win.ActualHeight*$k
  $p=Get-QmDockPlacement $region $ww $hh $script:CFG.positions[$script:CFG.layout]
@@ -217,7 +257,7 @@ function New-QmTrayMenu([double]$scale=1) {
  $sub=Add-QmMenu $m '显示内容' '' $null $false 'fields'
  $fieldGroups=@(
   @{Title='速度与时间';Keys=@('tps','turn','age','latency');Icons=@('speed','clock','clock','clock')},
-  @{Title='用量与账户';Keys=@('token','credits','balance','credit');Icons=@('token','credit','account','gift')},
+  @{Title='用量与账户';Keys=@('token','credits','credit');Icons=@('token','credit','gift')},
   @{Title='会话与活动';Keys=@('requests','tools','status','title');Icons=@('session','tools','status','session')}
  )
  if($script:CFG.layout -eq 'sidebar'){[void](Add-QmMenuHeading $sub '卡片固定显示全部指标' '以下开关仅作用于条形布局')}

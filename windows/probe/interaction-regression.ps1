@@ -21,10 +21,11 @@ try{
  $script:QM_S.title='fixture';$script:QM_S.model='test';$script:QM_S.sessionId='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';$script:QM_S.toolCount=0;$script:QM_S.ctxStats=[pscustomobject]@{toolCalls=[pscustomobject]@{total=9000}};$script:QM_S.estOut=1234;$script:QM_S.exactOut=1240;$script:QM_S.credits=12.3
  Update-QmView
  Check ($script:UI_SEGS.tools.Text -eq '0') 'zero local tools never inherits another session snapshot'
- $tipLines=@($script:UI.border.ToolTip.Content -split "`n")
- Check ($tipLines.Count -ge 9 -and $tipLines[0] -eq '会话：fixture' -and $tipLines[1].StartsWith('模型：') -and $tipLines[6].StartsWith('请求：')) 'tooltip retains separate metric lines'
- Check ($script:UI.border.ToolTip.Content -match '输出 Token：1\.2k（精确 1240）') 'tooltip exposes the exact token count behind an abbreviated value'
- Check ($script:UI.border.ToolTip.Content -match '积分/请求：') 'tooltip includes per-request credits'
+ $tip=$script:UI_TIP
+ Check ($tip -and $tip.Title.Text -eq 'fixture' -and $tip.Model.Text.StartsWith('模型 test') -and $tip.Tps.Text -ne '' -and $tip.Turn.Text -ne '' -and $tip.Age.Text -ne '' -and $tip.Meta.Text.StartsWith('请求 0')) 'themed tooltip separates session, model and metric rows'
+ Check ($tip.Token.Text -eq '1.2k' -and $tip.Meta.Text.Contains('精确输出 1,240')) 'themed tooltip exposes the exact token count behind an abbreviated value'
+ Check ($tip.Meta.Text -match '积分/请求 ') 'themed tooltip includes per-request credits'
+ Check ($script:UI.border.ToolTip -is [Windows.Controls.ToolTip] -and $script:UI.border.ToolTip.Content -eq $tip.Root) 'bar tooltip hosts the themed card'
  $script:openedUrl='';$script:checksStarted=0
  function Start-Process {param($FilePath) $script:openedUrl=$FilePath}
  function Start-QmUpdateCheck {$script:checksStarted++}

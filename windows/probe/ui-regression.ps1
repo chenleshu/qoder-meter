@@ -46,7 +46,7 @@ if($Full){
   else {
    Set-QmBarWidth 420
    Check ($script:UI_BAR.Width -le 420 -and $script:UI_BAR.Width -ge 280) "$layout fits reserved field slots in a narrow region"
-   Check ($script:UI_GROUPS['token'].Element.Visibility -eq 'Visible' -and $script:UI_GROUPS['balance'].Element.Visibility -eq 'Visible') "$layout keeps token and balance when space is tight"
+   Check ($script:UI_GROUPS['token'].Element.Visibility -eq 'Visible' -and -not $script:UI_GROUPS.ContainsKey('balance') -and $script:UI_BAR_PILLS.credit.Visibility -eq 'Visible') "$layout keeps token and the single balance pill when space is tight"
    Check (![double]::IsNaN([double]$script:UI_STATE_PILL.Width) -and $script:UI_STATE_PILL.Width -gt 0) "$layout reserves a fixed status pill capacity"
    Check ($script:UI_SEGS.token.FontSize -ge 12 -and $script:UI_STATUS.FontSize -ge 11) "$layout default metric and status text are readable at 96 DPI"
   }

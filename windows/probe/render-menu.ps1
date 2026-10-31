@@ -10,7 +10,7 @@ $root=Split-Path $PSScriptRoot -Parent
 $imports=[ordered]@{
  'lib-config-layout.ps1'=@('New-QmConfig')
  'lib-data.ps1'=@('Format-QmTps','Cut-QmText')
- 'lib-account.ps1'=@('Format-QmNum','Format-QmPlan','Get-QmCstNow','Get-QmCampaignDay','Get-QmClaims','Get-QmAccountStatus')
+ 'lib-account.ps1'=@('Format-QmNum','Format-QmPlan','Get-QmCstNow','Get-QmCampaignDay','Get-QmClaims','Get-QmClaimedTodayIds','Get-QmClaimableCampaigns','Get-QmAccountStatus')
  'meter.ps1'=@('Add-QmMenu','New-QmTrayMenu')
 }
 foreach($file in $imports.Keys){
