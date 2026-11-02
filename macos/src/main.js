@@ -26,6 +26,7 @@ const LOCAL_STORAGE_DIR = HOME + '/Library/Application Support/com.qoder.app.sta
 const SETTINGS_DIR = HOME + '/Library/Application Support/QoderMeter';
 const SETTINGS_PATH = SETTINGS_DIR + '/settings.json';
 const STATS_CACHE_PATH = SETTINGS_DIR + '/stats-cache.json';
+const STATS_INDEX_PATH = SETTINGS_DIR + '/stats-files.json';
 const LOG_PATH = HOME + '/Library/Logs/QoderMeter.log';
 const OLD_LOGIN_PLIST = HOME + '/Library/LaunchAgents/com.qoder.meter.plist';
 const WATCH_PLIST = HOME + '/Library/LaunchAgents/com.qoder.meter.watch.plist';
@@ -47,6 +48,10 @@ const POLL_SECONDS = 0.6;
 const STATS_PAGE_SIZE = 6;
 const STATS_TREND_MAX = 12;
 const STATS_CACHE_MS = 10 * 60 * 1000;
+// 扫描按文件切片，单片耗时受限，面板才不会在主线程上冻住数秒。
+const STATS_SCAN_SLICE_MS = 240;
+const STATS_SCAN_SLICE_FILES = 2;
+const STATS_INDEX_VERSION = 2;
 
 /* 统计面板的图文仪表盘骨架。所有纵向坐标都从顶部起算，再经 top(t, h)
  * 换算成 AppKit 的自下而上坐标；测量与绘制共用这些常量，避免面板高度
@@ -296,6 +301,7 @@ const state = {
   statsHint: '',
   statsCache: null,
   statsData: null,
+  statsScanning: false,
   frontIsQoder: false,
   bottomAutoHide: true,
   bottomRevealed: false,
@@ -417,6 +423,9 @@ let statsFooterNote = null;
 let statsPillBox = null;
 let statsIconView = null;
 let statsButtonRect = null;
+let statsFileIndex = {};
+let statsIndexLoaded = false;
+let statsScan = null;
 let settingsThemePopup = null;
 let settingsBottomAutoHide = null;
 let settingsUpdateButton = null;
@@ -1160,7 +1169,8 @@ const STATS_JQ = [
   '[.timestamp, (.message.model//"unknown"), (.message.usage.credits//0),',
   '(.message.usage.input_tokens//0), (.message.usage.cache_read_input_tokens//0),',
   '(.message.usage.cache_creation_input_tokens//0), (.message.usage.output_tokens//0),',
-  '((.message.usage.request_id)//""), (txt|length), (txt|[scan("\\\\p{Han}")]|length)] | @tsv'
+  '((.message.usage.request_id)//""), (txt|length), (txt|[scan("\\\\p{Han}")]|length),',
+  '(input_filename//"")] | @tsv'
 ].join(' ');
 
 function pad2(n) {
@@ -1192,38 +1202,140 @@ function saveStatsCache(cache) {
   } catch (e) {}
 }
 
-function collectDailyUsage(force) {
-  const now = Date.now();
-  if (!force && state.statsCache && now - state.statsCache.at < STATS_CACHE_MS) {
-    return state.statsCache;
+/* 用量扫描按文件增量记账（mtime + size），只有变化的日志才重读；扫描按时间切片
+ * 推进，面板打开时不会在主线程上冻住数秒。 */
+function loadStatsFileIndex() {
+  statsIndexLoaded = true;
+  try {
+    const text = readString(STATS_INDEX_PATH);
+    if (!text) return;
+    const obj = JSON.parse(text);
+    if (!obj || obj.v !== STATS_INDEX_VERSION || !obj.files || typeof obj.files !== 'object') return;
+    const keys = Object.keys(obj.files);
+    for (let i = 0; i < keys.length; i++) {
+      const entry = obj.files[keys[i]];
+      if (!entry || typeof entry !== 'object') continue;
+      if (!entry.days || typeof entry.days !== 'object') continue;
+      const m = Number(entry.m);
+      const s = Number(entry.s);
+      if (!isFinite(m) || !isFinite(s) || s < 0) continue;
+      statsFileIndex[keys[i]] = { m: m, s: s, days: entry.days };
+    }
+  } catch (e) {
+    logError('loadStatsFileIndex', e);
   }
-  const fileText = sh('/usr/bin/find ' + q(PROJECTS_ROOT) + ' -type f -name "*.jsonl" 2>/dev/null').trim();
-  const files = fileText ? fileText.split(/\r\n|\r|\n/).filter(Boolean) : [];
-  const days = {};
-  if (!files.length) {
-    state.statsCache = { at: now, days: days, rows: 0 };
-    return state.statsCache;
+}
+
+function saveStatsFileIndex() {
+  try {
+    sh('/bin/mkdir -p ' + q(SETTINGS_DIR));
+    const s = $.NSString.alloc.initWithString(JSON.stringify({
+      v: STATS_INDEX_VERSION, at: Date.now(), files: statsFileIndex
+    }));
+    s.writeToFileAtomicallyEncodingError(STATS_INDEX_PATH, true, $.NSUTF8StringEncoding, null);
+  } catch (e) {
+    logError('saveStatsFileIndex', e);
   }
-  const cmd = '/usr/bin/jq -r ' + q(STATS_JQ) + ' ' + files.map(q).join(' ') + ' 2>/dev/null || true';
-  const out = sh(cmd);
-  const seen = {};
-  let rows = 0;
-  const lines = out ? out.split(/\r\n|\r|\n/) : [];
+}
+
+// 一次 find 取清单，再一次 stat 取大小和 mtime，避免每个文件起一个进程。
+function statsListFiles() {
+  const found = sh('/usr/bin/find ' + q(PROJECTS_ROOT) + ' -type f -name "*.jsonl" 2>/dev/null');
+  const paths = found ? found.split(/\r\n|\r|\n/).filter(Boolean) : [];
+  if (!paths.length) return [];
+  const stamped = sh('/usr/bin/stat -f "%N|%z|%m" ' + paths.map(q).join(' ') + ' 2>/dev/null');
+  const lines = stamped ? stamped.split(/\r\n|\r|\n/) : [];
+  const list = [];
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    const cols = line.split('\t');
+    const m = /^(.*)\|(\d+)\|(\d+)$/.exec(lines[i]);
+    if (!m) continue;
+    list.push({ path: m[1], s: Number(m[2]), m: Number(m[3]) * 1000 });
+  }
+  return list;
+}
+
+function statsMergeModel(target, src) {
+  if (!target || typeof target !== 'object') return;
+  target.credits += Number(src.credits) || 0;
+  target.tokens += Number(src.tokens) || 0;
+  target.requests += Number(src.requests) || 0;
+  if (src.estimated) target.estimated = true;
+}
+
+function statsAggregateFromIndex() {
+  const days = {};
+  let rows = 0;
+  const files = Object.keys(statsFileIndex);
+  for (let i = 0; i < files.length; i++) {
+    const entry = statsFileIndex[files[i]];
+    const keys = Object.keys(entry.days || {});
+    for (let j = 0; j < keys.length; j++) {
+      const src = entry.days[keys[j]];
+      if (!src || typeof src !== 'object') continue;
+      if (!days[keys[j]]) {
+        days[keys[j]] = { credits: 0, tokens: 0, requests: 0, estimated: false, models: {} };
+      }
+      const day = days[keys[j]];
+      day.credits += Number(src.credits) || 0;
+      day.tokens += Number(src.tokens) || 0;
+      day.requests += Number(src.requests) || 0;
+      if (src.estimated) day.estimated = true;
+      const models = Object.keys(src.models || {});
+      for (let k = 0; k < models.length; k++) {
+        const sm = src.models[models[k]];
+        if (!day.models[models[k]]) {
+          day.models[models[k]] = { credits: 0, tokens: 0, requests: 0, estimated: false };
+        }
+        statsMergeModel(day.models[models[k]], sm || {});
+      }
+      rows += Number(src.requests) || 0;
+    }
+  }
+  return { days: days, rows: rows };
+}
+
+function statsAddDayRow(days, key, model, credits, tokens, estimated) {
+  if (!days[key]) {
+    days[key] = { credits: 0, tokens: 0, requests: 0, estimated: false, models: {} };
+  }
+  const day = days[key];
+  day.credits += credits;
+  day.tokens += tokens;
+  day.requests += 1;
+  if (!day.models[model]) {
+    day.models[model] = { credits: 0, tokens: 0, requests: 0, estimated: false };
+  }
+  const m = day.models[model];
+  m.credits += credits;
+  m.tokens += tokens;
+  m.requests += 1;
+  if (estimated > 0) {
+    day.estimated = true;
+    m.estimated = true;
+  }
+}
+
+function statsBucketScan(batch, text) {
+  const buckets = {};
+  for (let i = 0; i < batch.length; i++) {
+    buckets[batch[i].path] = { days: {}, seen: {}, rows: 0 };
+  }
+  const lines = text ? text.split(/\r\n|\r|\n/) : [];
+  for (let i = 0; i < lines.length; i++) {
+    const cols = lines[i] ? lines[i].split('\t') : [];
     if (cols.length < 10) continue;
-    const ts = cols[0];
-    const model = cols[1] || 'unknown';
+    // 旧输出没有第 11 列时，单文件批次仍能归属；多文件批次则丢弃，交给下一轮重扫。
+    const path = cols.length > 10 && cols[10] ? cols[10] :
+      (batch.length === 1 ? batch[0].path : '');
+    const bucket = buckets[path];
+    if (!bucket) continue;
     const rid = cols[7] || '';
     if (rid) {
-      if (seen[rid]) continue;
-      seen[rid] = true;
+      if (bucket.seen[rid]) continue;
+      bucket.seen[rid] = true;
     }
-    const t = Date.parse(ts);
-    if (!isFinite(t)) continue;
-    const key = dateKey(new Date(t));
+    const stamp = Date.parse(cols[0]);
+    if (!isFinite(stamp)) continue;
     const credits = Number(cols[2]) || 0;
     const exact = (Number(cols[3]) || 0) + (Number(cols[4]) || 0) +
       (Number(cols[5]) || 0) + (Number(cols[6]) || 0);
@@ -1231,28 +1343,113 @@ function collectDailyUsage(force) {
     const cjk = Number(cols[9]) || 0;
     const estimated = exact > 0 ? 0 :
       Math.round(cjk / 1.35 + Math.max(0, chars - cjk) / 3.8);
-    const tokens = exact > 0 ? exact : estimated;
-    if (!days[key]) {
-      days[key] = { credits: 0, tokens: 0, requests: 0, estimated: false, models: {} };
-    }
-    const day = days[key];
-    day.credits += credits;
-    day.tokens += tokens;
-    day.requests++;
-    if (estimated > 0) day.estimated = true;
-    if (!day.models[model]) {
-      day.models[model] = { credits: 0, tokens: 0, requests: 0, estimated: false };
-    }
-    const m = day.models[model];
-    m.credits += credits;
-    m.tokens += tokens;
-    m.requests++;
-    if (estimated > 0) m.estimated = true;
-    rows++;
+    statsAddDayRow(bucket.days, dateKey(new Date(stamp)), cols[1] || 'unknown',
+      credits, exact > 0 ? exact : estimated, estimated);
+    bucket.rows++;
   }
-  log('STATS files=' + files.length + ' rows=' + rows + ' out=' + (out ? out.length : 0) + ' days=' + Object.keys(days).length);
-  state.statsCache = { at: now, days: days, rows: rows };
+  for (let i = 0; i < batch.length; i++) {
+    const item = batch[i];
+    const bucket = buckets[item.path];
+    statsFileIndex[item.path] = { m: item.m, s: item.s, days: bucket.days };
+  }
+}
+
+function finishStatsScan() {
+  const rescanned = statsScan ? statsScan.total : 0;
+  statsScan = null;
+  state.statsScanning = false;
+  const agg = statsAggregateFromIndex();
+  state.statsCache = { at: Date.now(), days: agg.days, rows: agg.rows };
+  saveStatsFileIndex();
   saveStatsCache(state.statsCache);
+  log('STATS rescanned=' + rescanned + ' indexed=' + Object.keys(statsFileIndex).length +
+    ' rows=' + agg.rows + ' days=' + Object.keys(agg.days).length);
+  if (statsPanel && !state.statsHidden) rebuildStatsWindow();
+}
+
+function runStatsScanSlice() {
+  if (!statsScan) return 0;
+  const deadline = Date.now() + STATS_SCAN_SLICE_MS;
+  let batch = [];
+  let scanned = 0;
+  while (statsScan.items.length) {
+    batch.push(statsScan.items.shift());
+    if (batch.length >= STATS_SCAN_SLICE_FILES || Date.now() >= deadline) {
+      const paths = batch.map(function (item) { return q(item.path); }).join(' ');
+      statsBucketScan(batch, sh('/usr/bin/jq -r ' + q(STATS_JQ) + ' ' + paths +
+        ' 2>/dev/null || true'));
+      scanned += batch.length;
+      batch = [];
+      if (statsScan.items.length && Date.now() >= deadline) break;
+    }
+  }
+  if (batch.length) {
+    const paths = batch.map(function (item) { return q(item.path); }).join(' ');
+    statsBucketScan(batch, sh('/usr/bin/jq -r ' + q(STATS_JQ) + ' ' + paths +
+      ' 2>/dev/null || true'));
+    scanned += batch.length;
+  }
+  if (!statsScan.items.length) finishStatsScan();
+  return scanned;
+}
+
+function statsScanNote() {
+  if (!state.statsScanning || !statsScan) return '';
+  const done = statsScan.total - statsScan.items.length;
+  return '正在补扫本机日志 ' + done + '/' + statsScan.total + ' 个文件…';
+}
+
+// 扫描进行中由计时器继续推进，面板只在补扫结束时整体重建一次。
+function tickStatsScan() {
+  if (!state.statsScanning || !statsScan) return;
+  runStatsScanSlice();
+  if (!state.statsScanning) return;
+  const agg = statsAggregateFromIndex();
+  state.statsCache = { at: Date.now(), days: agg.days, rows: agg.rows };
+  if (statsFooterNote && statsPanel && statsPanel.isVisible) {
+    try { statsFooterNote.setStringValue(statsScanNote()); } catch (e) {}
+  }
+}
+
+function collectDailyUsage(force) {
+  const now = Date.now();
+  if (!force && state.statsCache && !state.statsScanning &&
+      now - state.statsCache.at < STATS_CACHE_MS) {
+    return state.statsCache;
+  }
+  if (!statsIndexLoaded) loadStatsFileIndex();
+  const listed = statsListFiles();
+  if (!listed.length && !Object.keys(statsFileIndex).length) {
+    state.statsScanning = false;
+    state.statsCache = { at: now, days: {}, rows: 0 };
+    return state.statsCache;
+  }
+  const pending = [];
+  const seen = {};
+  for (let i = 0; i < listed.length; i++) {
+    const item = listed[i];
+    seen[item.path] = true;
+    const entry = statsFileIndex[item.path];
+    if (!entry || entry.m !== item.m || entry.s !== item.s) pending.push(item);
+  }
+  const indexed = Object.keys(statsFileIndex);
+  for (let i = 0; i < indexed.length; i++) {
+    if (!seen[indexed[i]]) delete statsFileIndex[indexed[i]];
+  }
+  if (!pending.length) {
+    const settled = statsAggregateFromIndex();
+    state.statsScanning = false;
+    state.statsCache = { at: now, days: settled.days, rows: settled.rows };
+    saveStatsCache(state.statsCache);
+    return state.statsCache;
+  }
+  if (statsScan) statsScan = null;
+  statsScan = { items: pending, total: pending.length };
+  state.statsScanning = true;
+  // 已有聚合结果就先让面板可用，补扫交给计时器；完全没有数据才就地扫一小片。
+  if (!state.statsCache) runStatsScanSlice();
+  const partial = statsAggregateFromIndex();
+  state.statsCache = { at: now, days: partial.days, rows: partial.rows };
   return state.statsCache;
 }
 
@@ -3850,7 +4047,8 @@ function buildStatsWindow() {
       toolButton(cy, actions[i].title, x, actions[i].w, actions[i].action, actions[i].tip);
       x += actions[i].w + gap;
     }
-    statsFooterNote = sLabel(state.statsHint || '本机日志汇总 · 不联网 · 估算以 ≈ 标记',
+    statsFooterNote = sLabel(statsScanNote() || state.statsHint ||
+      '本机日志汇总 · 不联网 · 估算以 ≈ 标记',
       [margin, top(cy + 6, 14), firstX - margin - 10, 14], 11, $.NSFontWeightRegular,
       $.NSColor.secondaryLabelColor);
     try { statsFooterNote.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
@@ -4807,7 +5005,8 @@ ObjC.registerSubclass({
     'statsRefresh:': {
       types: ['void', ['id']],
       implementation: function (sender) {
-        collectDailyUsage(true);
+        // 只作废聚合缓存：重扫按文件增量在后续 tick 推进，点击不会被主线程冻住。
+        state.statsCache = null;
         state.statsData = null;
         state.statsHint = '';
         rebuildStatsWindow();
@@ -5132,6 +5331,7 @@ function tick() {
     applyWindowLayout();
     refreshVisibility();
     refreshStatsVisibility();
+    tickStatsScan();
   } catch (e) {
     logError('tick', e);
   }

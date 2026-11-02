@@ -20,7 +20,7 @@ if(!(Test-Path -LiteralPath $OutputDirectory)){throw 'Output directory must alre
 # read or write the real Meter settings directory where a live cache lives.
 $statsScratch=Join-Path ([IO.Path]::GetTempPath()) ('qm-render-stats-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($statsScratch)
-$script:QM_VERSION='2.1.0';$script:QM_SHUTDOWN=$true
+$script:QM_VERSION='2.1.1';$script:QM_SHUTDOWN=$true
 $script:CFG=New-QmConfig;$script:CFG.skin='paper'
 $script:QM_CLAIMS_PATH=Join-Path $OutputDirectory 'claims-fixture.json';$script:QM_CLAIMS=$null
 $script:ACCOUNT=@{
