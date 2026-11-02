@@ -158,7 +158,7 @@ try{
   $expectedGroups=@{
    '快捷与会话'='设置…|隐藏状态条|自动跟随当前会话|选择并固定会话'
    '外观与布局'='停靠位置|字号|外观|显示内容'
-   '账户与应用'='账户积分与领取|启动与退出行为|更多操作|退出 Qoder Meter'
+   '账户与应用'='账户积分与领取|用量统计…|启动与退出行为|更多操作|退出 Qoder Meter'
   }
   foreach($heading in $sections){
    $names=@();for($i=$menu.Items.IndexOf($heading)+1;$i -lt $menu.Items.Count;$i++){if($menu.Items[$i].Kind -eq 'section'){break};$names+=$menu.Items[$i].Text}
@@ -182,17 +182,20 @@ try{
   Check ($fieldEntries.Count -eq 11 -and (($fieldEntries|ForEach-Object {$_.Tag.Value.Key}) -join '|') -eq (($fieldKeys|ForEach-Object {'display.'+$_}) -join '|')) 'all eleven display fields in the intended group order'
   $sectionAt=@(0,5,9)
   for($i=0;$i -lt 3;$i++){Check ($fields.Items.IndexOf($fieldSections[$i]) -eq $sectionAt[$i]) ('field group position: '+$fieldSections[$i].Text)}
-  Check (@($fieldEntries|Where-Object {$_.Checked -and $_.Glyph -and $_.Tag.Value.Value -eq $false}).Count -eq 11) 'field icons and checks coexist; toggle values are inverse'
+  $offFields=@('requests','tools','status')
+  $checked=@($fieldEntries|Where-Object {$_.Checked -and $_.Glyph -and $_.Tag.Value.Value -eq $false}).Count
+  $unchecked=@($fieldEntries|Where-Object {!$_.Checked -and $_.Glyph -and $_.Tag.Value.Value -eq $true}).Count
+  Check ($checked -eq 8 -and $unchecked -eq 3 -and (($fieldEntries|Where-Object {!$_.Checked}|ForEach-Object {$_.Tag.Value.Key}) -join '|') -eq (($offFields|ForEach-Object {'display.'+$_}) -join '|')) 'field icons and checks coexist; idle, tools, and requests start off'
   $sessions=(Find-MenuItem $menu '选择并固定会话').DropDown
   Check ($sessions.Items[0].Text.Length -le 30 -and $sessions.Items[0].Text.EndsWith('…') -and $sessions.Items[0].ToolTipText -ceq $script:longTitle -and $sessions.Items[0].AccessibleName -ceq $script:longTitle -and $sessions.Items[0].AccessibilityObject.Name -ceq $script:longTitle) 'long session is abbreviated visually, full tooltip/accessibility preserved'
   Check ($sessions.Items[1].Text -eq '未命名会话') 'unnamed session fallback'
   $account=Find-MenuItem $menu '账户积分与领取'
   Check ($account.Detail -eq '余 5,730  ·  今 +4,196' -and $account.AccessibleDescription -eq $account.Detail -and $account.DropDownItems[0].Text -eq '待领取 2 项权益') 'cached account balance and claimable summary'
-  $expected=@('settings','toggleHidden','set|follow|False','set|pinned|aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','set|pinned|11111111-2222-3333-4444-555555555555','claim','set|creditAuto|False','claims','usagePage','set|autostart|True','set|closeWithQoder|False','refresh','reset','settingsDir','exit')
+  $expected=@('settings','toggleHidden','set|follow|False','set|pinned|aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee','set|pinned|11111111-2222-3333-4444-555555555555','claim','set|creditAuto|False','claims','usagePage','stats','set|autostart|True','set|closeWithQoder|False','refresh','reset','settingsDir','exit')
   foreach($key in @('title','toolbar','bottom','sidebar')){$expected+='set|layout|'+$key}
   foreach($key in @('small','normal','large','xlarge')){$expected+='set|fontSize|'+$key}
   foreach($key in @('auto','paper','graphite','ocean','dusk','sand')){$expected+='set|skin|'+$key}
-  foreach($key in $fieldKeys){$expected+='set|display.'+$key+'|False'}
+  foreach($key in $fieldKeys){$expected+='set|display.'+$key+'|'+$(if($offFields -contains $key){'True'}else{'False'})}
   $actions=@(Get-MenuEntries $menu|Where-Object {$_.Tag.Command})
   $actual=@($actions|ForEach-Object {Get-CommandKey $_.Tag.Command $_.Tag.Value})
   Check ((($actual|Sort-Object) -join "`n") -ceq (($expected|Sort-Object) -join "`n")) 'all legacy operations retained with exact command payloads'

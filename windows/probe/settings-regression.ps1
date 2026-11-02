@@ -33,7 +33,7 @@ function Invoke-QmCommand([string]$command,$value){
   }
   Save-QmConfig
   Sync-QmSettings
- }elseif($command -notin @('update','release')){throw ('Unexpected command: '+$command)}
+ }elseif($command -notin @('update','release','stats')){throw ('Unexpected command: '+$command)}
 }
 function Close-SettingsFixture {
  if($script:UI.settings){$script:UI.settings.Tag='dispose';$script:UI.settings.Close();$script:UI.settings=$null}
@@ -61,6 +61,12 @@ try{
  $window=$script:UI.settings;$pin=$script:QM_SETTINGS_CONTROLS['pinned']
  Check ($pin -is [Windows.Controls.ComboBox]) 'empty recents still create the pinned ComboBox'
  Check ($pin -and $pin.Items.Count -eq 0 -and !$pin.IsEnabled) 'empty pinned choices are disabled'
+ $stats=$script:QM_SETTINGS_CONTROLS['stats'];$statsPreview=$script:QM_SETTINGS_CONTROLS['statsPreview']
+ Check ($stats -is [Windows.Controls.Button] -and $stats.Content -eq '打开统计' -and $stats.Tag.Command -eq 'stats') 'settings exposes the local statistics entry'
+ Check ($statsPreview -is [Windows.Controls.Border] -and $statsPreview.Width -eq 92 -and $statsPreview.Height -eq 52 -and !$statsPreview.IsHitTestVisible -and @($statsPreview.Child.Children|Where-Object {$_ -is [Windows.Shapes.Rectangle]}).Count -eq 5) 'settings shows a non-clickable miniature trend preview beside the statistics button'
+ $stats.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
+ Check ($script:Commands.Count -eq 1 -and $script:Commands[0].Command -eq 'stats') 'statistics button dispatches its command to the router'
+ $script:Commands.Clear()
  Check ($window.Width -eq 450 -and $window.Height -eq 760 -and (Get-SettingsScroll $window)) 'settings retain the 450x760 scrollable window'
  $script:QM_S.recent=@([pscustomobject]@{session_id=$id;title='First session'})
  Sync-QmSettings
@@ -97,6 +103,31 @@ try{
  $script:CFG.pinned='';Sync-QmSettings
  Check ($pin.Items.Count -eq 0 -and !$pin.IsEnabled -and $pin.SelectedIndex -eq -1) 'follow removes the supplemental pin and disables empty choices'
  Check ($script:Commands.Count -eq 0) 'all programmatic pin changes remain suppressed'
+
+ # Account summary is driven by the same cached status used by the meter and claims window.
+ $now=Get-QmCstNow;$today=Get-QmCampaignDay
+ $ledger=New-Object System.Collections.Generic.List[object]
+ $ledger.Add([pscustomobject]@{campaignId='daily-today';campaignKey='daily';day=$today;title='每日 100 Credits';amount=100;kind='CREDITS';scope='';claimedAt=$now.AddMinutes(-9).ToString('s');expiresAt='';replayed=$false})
+ $ledger.Add([pscustomobject]@{campaignId='sota-today';campaignKey='sota';day=$today;title='SOTA 算力补给包';amount=4096;kind='CREDITS';scope='C_S_U_SERIES';claimedAt=$now.AddMinutes(-4).ToString('s');expiresAt=$now.AddDays(1).ToString('s');replayed=$false})
+ $script:QM_CLAIMS=[pscustomobject]@{Version=1;Entries=$ledger}
+ $script:ACCOUNT=@{
+  Auth=[pscustomobject]@{Name='示例账户';Email='demo@example.com';UserId='demo';Error=''}
+  Usage=[pscustomobject]@{Plan='personal_professional';ExpiresAt=[DateTimeOffset]::UtcNow.AddDays(20).ToUnixTimeMilliseconds();PlanTotal=2000;PlanUsed=1666;PlanRemaining=334;AddOnTotal=3400;AddOnUsed=2100;AddOnRemaining=1300
+   Packages=@([pscustomobject]@{Name='act-demo';Title='SOTA 算力补给包';Description='SOTA 专属';Total=4096;Used=0;Remaining=4096;ExpiresAt=[DateTimeOffset]::UtcNow.AddHours(8).ToUnixTimeMilliseconds();Available=$true;Status='active'})}
+  Campaigns=@([pscustomobject]@{CampaignId='new-campaign';CampaignKey='new';Title='每日 100 Credits';Amount=100;Kind='CREDITS';Scope='';ClaimStatus='CLAIMABLE';ActionType='CLAIM_BENEFIT'})
+  Running=$false;Error='';UsageAt=1L;CampAt=1L;NextTry=0L;LastFail=@{};Notified=$null;At=''
+ }
+ Sync-QmSettings
+ $c=$script:QM_SETTINGS_CONTROLS
+ Check ($c['accountName'].Text -eq '示例账户' -and $c['accountPlanText'].Text -eq 'Pro' -and $c['accountPlan'].Visibility -eq 'Visible') 'account summary shows name and plan'
+ Check ($c['accountState'].Text -eq '可领 1 项' -and $c['accountStatePill'].Background.Color -eq (Get-QmBrush $script:QM_SKINS['paper'].goldTint).Color) 'account summary marks claimable benefits in gold'
+ Check ($c['accountBalance'].Text -eq '5,730' -and $c['accountToday'].Text -eq '+4,196' -and $c['accountTodaySub'].Text -eq '今日已领 · 2 项') 'account summary balances packages against today records'
+ Check ($c['creditStatus'].Text -match '余额构成：套餐 334 · 加赠 1,300 · 活动包 4,096' -and $c['creditStatus'].Text -match '待领取 1 项，可立即领取。') 'account detail lists composition and claimable state'
+ Check ($c['claim'].Content -eq '立即领取全部' -and $c['claim'].IsEnabled) 'claim action is enabled when idle'
+ $script:ACCOUNT.Running=$true;Sync-QmSettings
+ Check ($c['claim'].Content -eq '领取中…' -and !$c['claim'].IsEnabled) 'claim action is disabled while a claim is running'
+ $script:ACCOUNT.Running=$false;Sync-QmSettings
+ Check ($script:Commands.Count -eq 0) 'account summary synchronization emits no commands'
 
  # Real release validation and status reader; no HTTP request is created.
  $release=[pscustomobject]@{tag_name='v1.4.0-win.2';html_url=$url;draft=$false;prerelease=$false;assets=@([pscustomobject]@{name='qoder-meter-windows-x64.zip';browser_download_url='https://github.com/chenleshu/qoder-meter/releases/download/v1.4.0-win.2/qoder-meter-windows-x64.zip'})}
@@ -142,7 +173,7 @@ try{
  Check ([math]::Abs((Get-SettingsScroll $replacement).VerticalOffset-$offset) -lt 1) 'hidden rebuild preserves the content scroll offset'
  Sync-QmSettings
  Check ([object]::ReferenceEquals($replacement,$script:UI.settings)) 'unchanged resolved palette does not rebuild on the next sync'
- $keys=@('layout','fontSize','skin','pinned','follow','autostart','bottomAutoHide','closeWithQoder','creditAuto','creditStatus','claim','update','updateText')+@($script:CFG.display.Keys|ForEach-Object {'display.'+$_})
+ $keys=@('layout','fontSize','skin','pinned','follow','autostart','bottomAutoHide','closeWithQoder','creditAuto','creditStatus','claim','update','updateText','stats','statsPreview','accountName','accountPlan','accountPlanText','accountStatePill','accountState','accountBalance','accountToday','accountTodaySub')+@($script:CFG.display.Keys|ForEach-Object {'display.'+$_})
  Check (@($keys|Where-Object {!$script:QM_SETTINGS_CONTROLS.ContainsKey($_)}).Count -eq 0) 'palette rebuild retains all existing settings controls'
  Check ($script:QM_SETTINGS_CONTROLS['pinned'].SelectedItem.Tag -eq $id -and $script:Commands.Count -eq 0 -and !$script:QM_SETTINGS_BUILDING) 'palette rebuild restores selection with event suppression released'
  Check ($null -eq $script:QM_LC_UPDATE_REQUEST) 'probe created no network update request'

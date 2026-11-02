@@ -10,6 +10,7 @@ if(!(Test-Path $lib)){ Check $false 'configuration and safe docking implementati
 $a=New-QmConfig; $b=New-QmConfig
 $a.display.token=$false
 Check ($b.display.token) 'defaults are independent objects'
+Check (!$b.display.status -and !$b.display.tools -and !$b.display.requests) 'idle, tools, and requests are off by default'
 $fixture='{"layout":"top","display":{"token":false,"tools":false},"positions":{"title":[77,12]},"panelHidden":true}' | ConvertFrom-Json
 $c=Merge-QmConfig $fixture
 Check (!$c.display.token -and !$c.display.tools -and $c.display.tps) 'nested display switches survive reload'
@@ -41,31 +42,32 @@ if($Full){
   $script:CFG.layout=$layout
   $view=if($layout -eq 'sidebar'){Build-QmCard $script:CFG 'paper' 1}else{Build-QmBar $script:CFG 'paper' 1}
   $view.Measure([System.Windows.Size]::new(700,500));$view.Arrange([System.Windows.Rect]::new(0,0,700,500))
-  Check ($null -ne $script:UI_GEAR) "$layout exposes settings control"
+  Check ($null -ne $script:UI_GEAR -and $null -ne $script:UI_STATS) "$layout exposes settings and the chart entry"
+  Check ($script:UI_STATS.ToolTip -eq '查看用量统计' -and $script:UI_STATS.Tag -eq 'QmStatsEntry' -and [Windows.Automation.AutomationProperties]::GetName($script:UI_STATS) -eq '查看用量统计') "$layout chart entry states its purpose to pointer and screen readers"
   if($layout -eq 'sidebar'){Check ($view.Width -eq 246 -and $view.Height -ge 220) 'card fixed width complete metrics'}
   else {
    Set-QmBarWidth 420
-   Check ($script:UI_BAR.Width -le 420 -and $script:UI_BAR.Width -ge 280) "$layout fits reserved field slots in a narrow region"
+   Check ($script:UI_BAR.Width -le 420 -and $script:UI_BAR.Width -ge 220) "$layout fits its compact fields in a narrow region"
    Check ($script:UI_GROUPS['token'].Element.Visibility -eq 'Visible' -and -not $script:UI_GROUPS.ContainsKey('balance') -and $script:UI_BAR_PILLS.credit.Visibility -eq 'Visible') "$layout keeps token and the single balance pill when space is tight"
-   Check (![double]::IsNaN([double]$script:UI_STATE_PILL.Width) -and $script:UI_STATE_PILL.Width -gt 0) "$layout reserves a fixed status pill capacity"
-   Check ($script:UI_SEGS.token.FontSize -ge 12 -and $script:UI_STATUS.FontSize -ge 11) "$layout default metric and status text are readable at 96 DPI"
+   Check ($null -eq $script:UI_STATE_PILL -and !$script:UI_GROUPS.ContainsKey('tools') -and !$script:UI_GROUPS.ContainsKey('requests')) "$layout keeps idle, tools, and requests hidden by default"
+   Check ($script:UI_SEGS.token.FontSize -ge 12) "$layout default metric text is readable at 96 DPI"
   }
  }
  $script:CFG.layout='title';$wide=Build-QmBar $script:CFG 'paper' 1;Set-QmBarWidth 900
  if(Get-Command Get-QmContentBarWidth -ErrorAction SilentlyContinue){
   $content=Get-QmContentBarWidth
-  Check ($script:UI_BAR.Width -le 900) 'reserved slots do not exceed the available region'
-  Check ([math]::Abs($script:UI_BAR.Width-$content) -le 2) 'bar width equals the visible reserved slots'
-  Check ($script:UI_GROUPS['token'].Element.Visibility -eq 'Visible' -and $script:UI_GROUPS['turn'].Element.Visibility -eq 'Visible' -and $script:UI_BAR_PILLS.status.Visibility -eq 'Visible') 'wider space restores metrics and status without changing capacities'
+  Check ($script:UI_BAR.Width -le 900) 'compact fields do not exceed the available region'
+  Check ([math]::Abs($script:UI_BAR.Width-$content) -le 2) 'bar width equals its visible content'
+  Check ($script:UI_GROUPS['token'].Element.Visibility -eq 'Visible' -and $script:UI_GROUPS['turn'].Element.Visibility -eq 'Visible') 'wider space restores metrics'
  }else{Check $false 'content width measurement missing'}
  Set-QmBarWidth 500
- Check ($script:UI_BAR.Width -le 500 -and $script:UI_BAR.Width -gt 300) 'reshrinking a wide bar refits the same reserved slots'
+ Check ($script:UI_BAR.Width -le 500 -and $script:UI_BAR.Width -gt 220) 'reshrinking a wide bar refits the same compact fields'
  $script:CFG=New-QmConfig;$script:CFG.layout='title';foreach($key in @($script:CFG.display.Keys)){$script:CFG.display[$key]=$false}
  $minimal=Build-QmBar $script:CFG 'paper' 1
  if(Get-Command Get-QmPreferredBarWidth -ErrorAction SilentlyContinue){Check ((Get-QmPreferredBarWidth) -lt 200) 'disabled fields shrink preferred width'}else{Check $false 'disabled fields shrink preferred width'}
- Check ($script:UI_GROUPS.Count -eq 0 -and $script:UI_BAR_RIGHT.Children.Count -eq 1) 'all fields disabled leave no orphan separators'
+ Check ($script:UI_GROUPS.Count -eq 0 -and @($script:UI_BAR_RIGHT.Children|Where-Object{$_.Tag -eq 'QmBarField'}).Count -eq 0) 'all fields disabled leave no orphan separators'
  $script:CFG.display.token=$true;$single=Build-QmBar $script:CFG 'paper' 1
- Check ($script:UI_GROUPS.Count -eq 1 -and $script:UI_GROUPS.token.Element.Children[0].Tag -eq 'QmBarSeparator' -and $script:UI_BAR_RIGHT.Children.Count -eq 1) 'single metric owns one divider after the persistent status dot'
+ Check ($script:UI_GROUPS.Count -eq 1 -and $script:UI_GROUPS.token.Element.Children[0].Tag -eq 'QmBarSeparator' -and @($script:UI_BAR_RIGHT.Children|Where-Object{$_.Tag -eq 'QmBarField'}).Count -eq 0) 'single metric owns one divider after the persistent status dot'
  foreach($skin in $script:QM_SKINS.Keys){
   foreach($scale in $script:QM_FONT_SIZES.Values){
    $script:CFG=New-QmConfig;$bar=Build-QmBar $script:CFG $skin $scale
@@ -79,6 +81,8 @@ if($Full){
    }
    Check $valid "$skin scale=$scale fields own subtle theme-aware noninteractive dividers"
    Check ($script:UI_BAR_RIGHT.Children[$script:UI_BAR_RIGHT.Children.Count-1] -eq $script:UI_GEAR) "$skin scale=$scale ends with settings rather than a divider"
+   $rightCount=$script:UI_BAR_RIGHT.Children.Count
+   Check ($script:UI_BAR_RIGHT.Children[$rightCount-2] -eq $script:UI_STATS) "$skin scale=$scale places the chart entry immediately before the settings gear"
    $script:UI_TPS.Text='133';$script:UI_SEGS.token.Text='207.9k';$script:UI_CREDIT.Text='5,730 / +4,096'
    $fits=$true;$narrowCount=0
    foreach($available in @(420,900,420)){
@@ -101,7 +105,7 @@ if($Full){
   $bar.Arrange([Windows.Rect]::new(0,0,$bar.Width,$bar.Height));$bar.UpdateLayout()
   $parts=@($bar.Width,$bar.ActualWidth,(Get-QmPreferredBarWidth));$fits=$bar.Width -le $available -and $bar.ActualWidth -le $available+.01
   $reason=if($fits){''}else{"outer=$($bar.Width)/$($bar.ActualWidth) available=$available"}
-  $elements=@($script:UI_HALO,$script:UI_BAR_TPS,$script:UI_GEAR)+@($script:UI_GROUPS.GetEnumerator()|Sort-Object Key|ForEach-Object{$_.Value.Element})+@($script:UI_BAR_PILLS.GetEnumerator()|Sort-Object Key|ForEach-Object{$_.Value})
+  $elements=@($script:UI_HALO,$script:UI_BAR_TPS,$script:UI_STATS,$script:UI_GEAR)+@($script:UI_GROUPS.GetEnumerator()|Sort-Object Key|ForEach-Object{$_.Value.Element})+@($script:UI_BAR_PILLS.GetEnumerator()|Sort-Object Key|ForEach-Object{$_.Value})
   $ranges=@()
   foreach($el in $elements){
    if(!$el){continue};$parts+=[string]$el.Visibility
@@ -127,23 +131,24 @@ if($Full){
   foreach($scale in $script:QM_FONT_SIZES.Values){
    foreach($layout in @('title','toolbar','bottom')){
     $script:CFG=New-QmConfig;$script:CFG.layout=$layout;$bar=Build-QmBar $script:CFG $skin $scale
-    $stable=$true;$fits=$true;$restored=$true;$first=$null
+    $fits=$true;$grows=$true
     foreach($available in @(80,180,285,420,689,900,1800,420)){
-     $baseline=$null
+     $widths=@()
      foreach($state in $states){
       $script:UI_TPS.Text=$state.Number
       foreach($text in $script:UI_SEGS.Values){$text.Text=$state.Number}
       if($script:UI_TITLE){$script:UI_TITLE.Text=$state.Title}
-      $script:UI_STATUS.Text=$state.Status;$script:UI_CREDIT.Text=$state.Credit
+      if($script:UI_STATUS){$script:UI_STATUS.Text=$state.Status}
+      $script:UI_CREDIT.Text=$state.Credit
       $geometry=Get-BarGeometry $available
       if(!$geometry.Fits){$fits=$false}
-      if($null -eq $baseline){$baseline=$geometry.Signature}elseif($baseline -cne $geometry.Signature){$stable=$false}
+      $widths+=$script:UI_BAR.Width
      }
-     if($available -eq 420){if($null -eq $first){$first=$baseline}elseif($first -cne $baseline){$restored=$false}}
+     # Compact slots track their own values: short content is narrower than long.
+     if($available -eq 1800 -and $widths[2] -le $widths[0]){$grows=$false}
     }
-    Check $stable "$layout $skin scale=$scale keeps width and columns stable through short-long-short content"
     Check $fits "$layout $skin scale=$scale keeps fields and settings in bounds without overlap"
-    Check $restored "$layout $skin scale=$scale restores identical geometry after host resize"
+    Check $grows "$layout $skin scale=$scale widens only as far as the longer content needs"
    }
   }
  }
@@ -156,28 +161,40 @@ if($Full){
     [Windows.Media.VisualTreeHelper]::SetRootDpi($bar,[Windows.DpiScale]::new($dpi,$dpi))
     $valid=[math]::Abs([Windows.Media.VisualTreeHelper]::GetDpi($bar).DpiScaleX-$dpi) -lt .001;$issue=''
     foreach($region in @(40,56,80,285,420,689,900,1800)){
-     $available=[math]::Floor($region*$dpi)/$dpi;$baseline=$null
+     $available=[math]::Floor($region*$dpi)/$dpi
      foreach($state in $states){
       $script:UI_TPS.Text=$state.Number;foreach($text in $script:UI_SEGS.Values){$text.Text=$state.Number}
       if($script:UI_TITLE){$script:UI_TITLE.Text=$state.Title}
-      $script:UI_STATUS.Text=$state.Status;$script:UI_CREDIT.Text=$state.Credit
+      if($script:UI_STATUS){$script:UI_STATUS.Text=$state.Status}
+      $script:UI_CREDIT.Text=$state.Credit
       $geometry=Get-BarGeometry $available
       if(!$geometry.Fits){$valid=$false;if(!$issue){$issue=" at $available : $($geometry.Reason)"}}
-      if($null -eq $baseline){$baseline=$geometry.Signature}elseif($baseline -cne $geometry.Signature){$valid=$false;if(!$issue){$issue=" at $available : geometry changed [$baseline] -> [$($geometry.Signature)]"}}
      }
     }
-    Check $valid "$layout scale=$scale dpi=$dpi preserves rounded bounds and content-independent widths$issue"
+    Check $valid "$layout scale=$scale dpi=$dpi preserves rounded bounds with content-sized fields$issue"
    }
   }
  }
  # Sparse configurations do not inherit widths from the previous view.
+ # Endpoint priority: the chart entry is expendable, the gear is the last one standing.
+ $script:CFG=New-QmConfig;$script:CFG.layout='title';$priority=Build-QmBar $script:CFG 'paper' 1
+ $gearVisible=$true;$statsRetreated=$false
+ foreach($available in @(689,180,120,80,60,40,20,0)){
+  Set-QmBarWidth $available
+  if($script:UI_GEAR.Visibility -ne 'Visible'){$gearVisible=$false}
+  if($available -eq 40){$statsRetreated=($script:UI_STATS.Visibility -eq 'Collapsed')}
+ }
+ Check $gearVisible 'the settings gear survives every narrow region down to zero'
+ Check $statsRetreated 'the chart entry retreats before the gear in extremely narrow space'
+ Set-QmBarWidth 689
+ Check ($script:UI_STATS.Visibility -eq 'Visible' -and $script:UI_GEAR.Visibility -eq 'Visible' -and $script:UI_STATS.Width -le 20) 'a wide region restores both endpoints without oversized slots'
  $script:CFG=New-QmConfig;foreach($key in @($script:CFG.display.Keys)){$script:CFG.display[$key]=$false}
  $bar=Build-QmBar $script:CFG 'paper' 1;$minimalWidth=Get-QmPreferredBarWidth
  $script:CFG.display.token=$true;$bar=Build-QmBar $script:CFG 'paper' 1;$tokenWidth=Get-QmPreferredBarWidth
  $script:UI_SEGS.token.Text='99999999999999999999999999999';Set-QmBarWidth 1800
- Check ($tokenWidth -gt $minimalWidth -and $script:UI_BAR.Width -eq $tokenWidth) 'field switches change capacity but a growing value never expands it'
+ Check ($tokenWidth -gt $minimalWidth -and $script:UI_BAR.Width -gt $tokenWidth) 'field switches add width and growing values expand to fit'
  $bar=Build-QmBar $script:CFG 'paper' 1.24
- Check ((Get-QmPreferredBarWidth) -gt $tokenWidth) 'font changes intentionally recalculate reserved capacity'
+ Check ((Get-QmPreferredBarWidth) -gt $tokenWidth) 'font changes grow the compact bar'
  Set-QmBarWidth 0
  Check ($script:UI_BAR.Width -eq 0) 'zero available width never forces the bar over host controls'
  $script:CFG=New-QmConfig;$script:CFG.layout='sidebar';$card=Build-QmCard $script:CFG 'paper' 1

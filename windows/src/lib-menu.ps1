@@ -176,7 +176,7 @@ function New-QmPopup([string]$skin,[double]$scale=1) {
  $m.Tag=@{Scale=$scale;Skin=$skin};return $m
 }
 function Set-QmMenuEntryStyle($item,[string]$icon='', [string]$detail='', [string]$tone='') {
- $glyphs=@{meter=0xE9D9;settings=0xE713;show=0xE890;hide=0xED1A;follow=0xE8B7;session=0xE8F2;layout=0xE8A9;font=0xE8D2;palette=0xE790;fields=0xE8FD;account=0xE77B;gift=0xE719;history=0xE81C;link=0xE774;power=0xE7E8;refresh=0xE72C;folder=0xE8B7;reset=0xE777;more=0xE712;exit=0xE8BB;token=0xE8A5;speed=0xE945;clock=0xE823;credit=0xE8D4;tools=0xE90F;status=0xE946;auto=0xE793}
+ $glyphs=@{meter=0xE9D9;settings=0xE713;show=0xE890;hide=0xED1A;follow=0xE8B7;session=0xE8F2;layout=0xE8A9;font=0xE8D2;palette=0xE790;fields=0xE8FD;account=0xE77B;gift=0xE719;history=0xE81C;stats=0xE9D9;link=0xE774;power=0xE7E8;refresh=0xE72C;folder=0xE8B7;reset=0xE777;more=0xE712;exit=0xE8BB;token=0xE8A5;speed=0xE945;clock=0xE823;credit=0xE8D4;tools=0xE90F;status=0xE946;auto=0xE793}
  if($glyphs.ContainsKey($icon)){$item.Glyph=[string][char]$glyphs[$icon]}
  $item.Detail=$detail;$item.Tone=$tone
  $item.AccessibleName=$item.Text;$item.AccessibleDescription=$detail

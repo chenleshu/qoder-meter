@@ -9,7 +9,7 @@ trap {
 }
 . (Join-Path $PSScriptRoot 'lib-interop.ps1')
 try{if(![QoderMeter.Native]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))){[void][QoderMeter.Native]::SetProcessDpiAwarenessContext([IntPtr]::new(-1))}}catch{}
-foreach($lib in @('lib-data.ps1','lib-ui.ps1','lib-account.ps1','lib-config-layout.ps1','lib-lifecycle.ps1','lib-settings.ps1')){. (Join-Path $PSScriptRoot $lib)}
+foreach($lib in @('lib-data.ps1','lib-ui.ps1','lib-account.ps1','lib-stats.ps1','lib-config-layout.ps1','lib-lifecycle.ps1','lib-settings.ps1')){. (Join-Path $PSScriptRoot $lib)}
 # 官方 campaigns 接口对 Meter 可能返回空列表；允许从 Qoder 本地缓存补齐可领权益。
 $script:QM_CAMPAIGN_CACHE_FALLBACK=$true
 $script:QM_MUTEX=[Threading.Mutex]::new($false,'Local\QoderMeterWin_SingleInstance')
@@ -21,7 +21,7 @@ if($Pin){$script:CFG.pinned=$Pin};if($script:QM_LAYOUT_NAMES.Contains($Layout)){
 $script:QM_S.pinned=$script:CFG.pinned
 $script:QM_AUTH=$null
 $script:ACCOUNT=@{Auth=$null;Usage=$null;Campaigns=$null;Running=$false;Error='';UsageAt=0L;CampAt=0L;NextTry=0L;LastFail=@{};Notified=$null;At=''}
-$script:UI=@{app=$null;win=$null;indicator=$null;settings=$null;tray=$null;sig='';skin='paper';visible=$false;dragging=$false;hoverAt=0L;tickNo=0;tick=$null;border=$null;region=$null;placement=$null;trayTip='';builds=0;manualExit=$false}
+$script:UI=@{app=$null;win=$null;indicator=$null;settings=$null;tray=$null;sig='';skin='paper';visible=$false;dragging=$false;hoverAt=0L;tickNo=0;tick=$null;border=$null;region=$null;placement=$null;trayTip='';builds=0;manualExit=$false;claimsWin=$null;statsWin=$null}
 $script:QM_SHUTDOWN=$false
 function Get-QmScale {return [double]$script:QM_FONT_SIZES[$script:CFG.fontSize]}
 function Get-QmVisualSig {return $script:CFG.layout+'|'+(Resolve-QmSkin $script:CFG.skin)+'|'+$script:CFG.fontSize+'|'+(($script:CFG.display.Keys|ForEach-Object{"$_=$($script:CFG.display[$_])"}) -join ',')}
@@ -200,6 +200,12 @@ function Invoke-QmCommand([string]$command,$value){
    'refresh'{Refresh-QmData}
    'claim'{$r=Invoke-QmAccountClaim;if(!$r.Claimed.Count -and $r.Message){Show-QmBalloon '账户权益' $r.Message}}
    'claims'{Show-QmClaimHistory;return}
+   'stats'{Show-QmStatsWindow;return}
+   'statsRange'{Set-QmStatsRange ([string]$value);return}
+   'statsGroup'{Set-QmStatsGroup ([string]$value);return}
+   'statsTab'{Set-QmStatsTab ([string]$value);return}
+   'statsPage'{Move-QmStatsPage ([int]$value);return}
+   'statsRefresh'{Refresh-QmStatsWindow;return}
    'usagePage'{Start-Process 'https://qoder.com/account/usage';return}
    'settingsDir'{Start-Process explorer.exe -ArgumentList ('"'+$script:QM_SETTINGSD+'"');return}
    'update'{[void](Start-QmUpdateCheck);Sync-QmSettings;return}
@@ -273,6 +279,7 @@ function New-QmTrayMenu([double]$scale=1) {
  [void]$sub.DropDownItems.Add([Windows.Forms.ToolStripSeparator]::new())
  [void](Add-QmMenu $sub '领取记录' 'claims' $null $false 'history')
  [void](Add-QmMenu $sub '打开 Qoder 用量页' 'usagePage' $null $false 'link')
+ [void](Add-QmMenu $m '用量统计…' 'stats' $null $false 'stats' '趋势图与自动摘要')
  $sub=Add-QmMenu $m '启动与退出行为' '' $null $false 'power'
  $autoStart=Get-QmAutoStart
  [void](Add-QmMenu $sub '随 Qoder 自动启动' 'set' @{Key='autostart';Value=(!$autoStart)} $autoStart 'power')
@@ -310,6 +317,7 @@ try{
   try{
    $script:UI.tickNo++
    if($script:UI.tickNo % 6 -eq 1){Refresh-QmData;Update-QmAccountState;Sync-QmSettings}
+   if($script:UI.claimsWin -and $script:UI.claimsWin.IsVisible){Sync-QmClaimHistory}
    if(!$script:UI.dragging -and (Get-QmVisualSig) -ne $script:UI.sig){Reset-QmVisual}
    Update-QmView;Update-QmPlacement
    if($script:UI.tickNo % 10 -eq 0 -and $script:CFG.closeWithQoder){

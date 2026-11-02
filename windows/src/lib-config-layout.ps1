@@ -3,8 +3,8 @@ function New-QmConfig {
  return [pscustomobject]@{
   schemaVersion=3; layout='title';skin='auto';fontSize='normal';paused=$false;panelHidden=$false
   closeWithQoder=$true;creditAuto=$true
-  pinned='';bottomAutoHide=$true
-  display=[ordered]@{tps=$true;turn=$true;age=$true;token=$true;credits=$true;requests=$true;tools=$true;latency=$true;status=$true;title=$true;credit=$true}
+  pinned='';bottomAutoHide=$true;statsRange='7d';statsGroup='day';statsTab='overview'
+  display=[ordered]@{tps=$true;turn=$true;age=$true;token=$true;credits=$true;requests=$false;tools=$false;latency=$true;status=$false;title=$true;credit=$true}
   positions=[ordered]@{sidebar=@(0,0);title=@(0,0);toolbar=@(0,0);bottom=@(0,0)}
  }
 }
@@ -19,7 +19,7 @@ function Merge-QmConfig($source) {
    elseif($v -is [array] -and $v.Count -eq 2){try{$cfg.positions[$key]=@([double]$v[0],[double]$v[1])}catch{}}
   }
  }
- foreach($p in @('layout','skin','fontSize','pinned')) {if($null -ne $source.$p){$cfg.$p=[string]$source.$p}}
+ foreach($p in @('layout','skin','fontSize','pinned','statsRange','statsGroup','statsTab')) {if($null -ne $source.$p){$cfg.$p=[string]$source.$p}}
  foreach($p in @('paused','panelHidden','closeWithQoder','creditAuto','bottomAutoHide')) {if($source.$p -is [bool]){$cfg.$p=$source.$p}}
  if($cfg.layout -eq 'top'){$cfg.layout='toolbar'}
  # Migrate the old obstructive default card into the user's title-bar position.
@@ -27,6 +27,9 @@ function Merge-QmConfig($source) {
  if($cfg.layout -notin @('title','toolbar','bottom','sidebar')){$cfg.layout='title'}
  if($cfg.skin -notin @('auto','paper','graphite','ocean','dusk','sand')){$cfg.skin='auto'}
  if($cfg.fontSize -notin @('small','normal','large','xlarge')){$cfg.fontSize='normal'}
+ if($cfg.statsRange -notin @('7d','30d','month','year')){$cfg.statsRange='7d'}
+ if($cfg.statsGroup -notin @('day','week','month')){$cfg.statsGroup='day'}
+ if($cfg.statsTab -notin @('overview','detail')){$cfg.statsTab='overview'}
  if($cfg.pinned -and $cfg.pinned -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'){$cfg.pinned=''}
  return $cfg
 }

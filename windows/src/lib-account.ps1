@@ -612,35 +612,257 @@ function Update-QmAccountState {
   }
 }
 
-function Show-QmClaimHistory {
-  if (-not $script:UI.claimsWin) {
-    $w = [Windows.Window]::new(); $w.Title = 'Qoder Meter 领取记录'; $w.Width = 470; $w.Height = 520
-    $w.MinWidth = 380; $w.MinHeight = 320; $w.ShowInTaskbar = $false; $w.WindowStartupLocation = 'CenterScreen'
-    $skin = Resolve-QmSkin $script:CFG.skin; $t = $script:QM_SKINS[$skin]
-    $w.Background = Get-QmBrush $t.bg; $w.Foreground = Get-QmBrush $t.text
-    $k = Get-QmScale; $font = [math]::Round(12 * $k)
-    $box = [Windows.Controls.TextBox]::new(); $box.IsReadOnly = $true; $box.TextWrapping = 'Wrap'
-    $box.VerticalScrollBarVisibility = 'Auto'; $box.FontSize = $font - 1; $box.FontFamily = [Windows.Media.FontFamily]::new('Segoe UI, Microsoft YaHei UI')
-    $box.Background = Get-QmBrush $t.bg; $box.Foreground = Get-QmBrush $t.text; $box.BorderThickness = [Windows.Thickness]::new(0)
-    $box.Padding = [Windows.Thickness]::new(14); $box.Margin = [Windows.Thickness]::new(14)
-    $w.Content = $box; $script:UI.claimsWin = $w
-    $w.Add_Closing({ param($sender, $e) if (-not $script:QM_SHUTDOWN -and $sender.Tag -ne 'dispose') { $e.Cancel = $true; $sender.Hide() } })
+function Format-QmClaimTime([string]$value) {
+  if (-not $value) { return '' }
+  try {
+    $d = [DateTimeOffset]::Parse($value, [Globalization.CultureInfo]::InvariantCulture)
+    return $d.ToOffset([TimeSpan]::FromHours(8)).ToString('HH:mm')
+  } catch { return '' }
+}
+
+function Format-QmClaimExpiry([string]$value) {
+  if (-not $value) { return '' }
+  try {
+    if ($value -match '^\d{10,}$') { return Format-QmExpiry ([long]$value) }
+    $d = [DateTimeOffset]::Parse($value, [Globalization.CultureInfo]::InvariantCulture)
+    return Format-QmExpiry ($d.ToUnixTimeMilliseconds())
+  } catch { return '' }
+}
+
+function Format-QmClaimWeekday([datetime]$date) {
+  return @('周日','周一','周二','周三','周四','周五','周六')[[int]$date.DayOfWeek]
+}
+
+function New-QmClaimPill([string]$text, [string]$ink, [string]$tint) {
+  $p = [Windows.Controls.Border]::new(); $p.Background = Get-QmBrush $tint
+  $p.CornerRadius = [Windows.CornerRadius]::new(8); $p.Padding = [Windows.Thickness]::new(8, 2, 8, 2); $p.VerticalAlignment = 'Center'
+  $p.Child = New-QmText $text 9.5 $ink 'Medium'
+  return $p
+}
+
+function New-QmClaimHistoryWindow {
+  $skin = Resolve-QmSkin $script:CFG.skin; $t = $script:QM_SKINS[$skin]; $k = Get-QmScale
+  $w = [Windows.Window]::new(); $w.Title = 'Qoder Meter 领取记录'
+  $w.Width = 500; $w.Height = 620; $w.MinWidth = 430; $w.MinHeight = 420
+  $w.ResizeMode = 'CanResize'; $w.ShowInTaskbar = $false; $w.WindowStartupLocation = 'CenterScreen'
+  Initialize-QmThemedWindow $w $skin
+  $outer = [Windows.Controls.Grid]::new(); $outer.Margin = [Windows.Thickness]::new(22)
+  foreach ($height in @('Auto', 'Auto', '*', 'Auto')) {
+    $rd = [Windows.Controls.RowDefinition]::new(); $rd.Height = [Windows.GridLengthConverter]::new().ConvertFromString($height); [void]$outer.RowDefinitions.Add($rd)
   }
+  # Header ---------------------------------------------------------------
+  $head = [Windows.Controls.Grid]::new(); $head.Margin = [Windows.Thickness]::new(0, 0, 0, 12)
+  foreach ($width in @('Auto', '*')) {
+    $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$head.ColumnDefinitions.Add($cd)
+  }
+  $logo = [Windows.Controls.Border]::new(); $logo.Width = 34; $logo.Height = 34; $logo.CornerRadius = [Windows.CornerRadius]::new(10); $logo.Background = Get-QmBrush $t.goldTint
+  $mark = New-QmText ([string][char]0xE81C) (14 * $k) $t.gold 'SemiBold'; $mark.FontFamily = [Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+  $mark.HorizontalAlignment = 'Center'; $mark.VerticalAlignment = 'Center'; $logo.Child = $mark; [void]$head.Children.Add($logo)
+  $titles = [Windows.Controls.StackPanel]::new(); $titles.Margin = [Windows.Thickness]::new(10, 0, 0, 0); $titles.VerticalAlignment = 'Center'
+  [void]$titles.Children.Add((New-QmText '领取记录' (18 * $k) $t.text 'SemiBold'))
+  $sub = New-QmText '账户余额与每日权益到账明细' (10 * $k) $t.faint; $sub.Margin = [Windows.Thickness]::new(0, 3, 0, 0); [void]$titles.Children.Add($sub)
+  [Windows.Controls.Grid]::SetColumn($titles, 1); [void]$head.Children.Add($titles)
+  [Windows.Controls.Grid]::SetRow($head, 0); [void]$outer.Children.Add($head)
+  # Summary --------------------------------------------------------------
+  $sum = [Windows.Controls.Border]::new(); $sum.Background = Get-QmBrush $t.track; $sum.BorderBrush = Get-QmBrush $t.divider
+  $sum.BorderThickness = [Windows.Thickness]::new(1); $sum.CornerRadius = [Windows.CornerRadius]::new(12)
+  $sum.Padding = [Windows.Thickness]::new(14, 12, 14, 13); $sum.Margin = [Windows.Thickness]::new(0, 0, 0, 12)
+  $sg = [Windows.Controls.StackPanel]::new(); $sum.Child = $sg
+  $who = [Windows.Controls.Grid]::new()
+  foreach ($width in @('*', 'Auto')) {
+    $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$who.ColumnDefinitions.Add($cd)
+  }
+  $nameRow = [Windows.Controls.StackPanel]::new(); $nameRow.Orientation = 'Horizontal'; $nameRow.VerticalAlignment = 'Center'
+  $name = New-QmText 'Qoder 账户' (12.5 * $k) $t.text 'SemiBold'; [void]$nameRow.Children.Add($name)
+  $plan = [Windows.Controls.Border]::new(); $plan.Background = Get-QmBrush $t.grayTint; $plan.CornerRadius = [Windows.CornerRadius]::new(7)
+  $plan.Padding = [Windows.Thickness]::new(7, 2, 7, 2); $plan.Margin = [Windows.Thickness]::new(8, 0, 0, 0); $plan.VerticalAlignment = 'Center'
+  $planText = New-QmText '—' (9.5 * $k) $t.soft 'Medium'; $plan.Child = $planText; [void]$nameRow.Children.Add($plan)
+  [void]$who.Children.Add($nameRow)
+  $statePill = New-QmClaimPill '读取中' $t.gray $t.grayTint; $stateText = $statePill.Child
+  [Windows.Controls.Grid]::SetColumn($statePill, 1); [void]$who.Children.Add($statePill); [void]$sg.Children.Add($who)
+  $bal = [Windows.Controls.Grid]::new(); $bal.Margin = [Windows.Thickness]::new(0, 7, 0, 0)
+  foreach ($width in @('*', 'Auto')) {
+    $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$bal.ColumnDefinitions.Add($cd)
+  }
+  $balLine = [Windows.Controls.StackPanel]::new(); $balLine.Orientation = 'Horizontal'
+  $balance = New-QmText '—' (25 * $k) $t.gold 'SemiBold' $true; [void]$balLine.Children.Add($balance)
+  $balCap = New-QmText '可用积分' (9.5 * $k) $t.faint; $balCap.Margin = [Windows.Thickness]::new(8, 0, 0, 3); $balCap.VerticalAlignment = 'Bottom'; [void]$balLine.Children.Add($balCap)
+  [void]$bal.Children.Add($balLine)
+  $todayBox = [Windows.Controls.StackPanel]::new(); $todayBox.HorizontalAlignment = 'Right'; $todayBox.VerticalAlignment = 'Center'
+  $today = New-QmText '+0' (14 * $k) $t.faint 'SemiBold' $true; $today.HorizontalAlignment = 'Right'; [void]$todayBox.Children.Add($today)
+  $todaySub = New-QmText '今日暂无领取' (9.5 * $k) $t.faint; $todaySub.HorizontalAlignment = 'Right'; $todaySub.Margin = [Windows.Thickness]::new(0, 2, 0, 0); [void]$todayBox.Children.Add($todaySub)
+  [Windows.Controls.Grid]::SetColumn($todayBox, 1); [void]$bal.Children.Add($todayBox); [void]$sg.Children.Add($bal)
+  $detail = New-QmText '' (9.8 * $k) $t.soft; $detail.TextWrapping = 'Wrap'; $detail.TextTrimming = 'None'; $detail.Margin = [Windows.Thickness]::new(0, 8, 0, 0)
+  [void]$sg.Children.Add($detail)
+  [Windows.Controls.Grid]::SetRow($sum, 1); [void]$outer.Children.Add($sum)
+  # List -----------------------------------------------------------------
+  $listWrap = [Windows.Controls.Grid]::new()
+  foreach ($height in @('Auto', '*')) {
+    $rd = [Windows.Controls.RowDefinition]::new(); $rd.Height = [Windows.GridLengthConverter]::new().ConvertFromString($height); [void]$listWrap.RowDefinitions.Add($rd)
+  }
+  $listHead = [Windows.Controls.Grid]::new(); $listHead.Margin = [Windows.Thickness]::new(2, 0, 2, 7)
+  foreach ($width in @('*', 'Auto')) {
+    $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$listHead.ColumnDefinitions.Add($cd)
+  }
+  [void]$listHead.Children.Add((New-QmText '最近记录' (11.5 * $k) $t.text 'SemiBold'))
+  $listNote = New-QmText '按天分组' (9.5 * $k) $t.faint; $listNote.VerticalAlignment = 'Center'
+  [Windows.Controls.Grid]::SetColumn($listNote, 1); [void]$listHead.Children.Add($listNote); [void]$listWrap.Children.Add($listHead)
+  $scroll = [Windows.Controls.ScrollViewer]::new(); $scroll.VerticalScrollBarVisibility = 'Auto'; $scroll.HorizontalScrollBarVisibility = 'Disabled'
+  $rows = [Windows.Controls.StackPanel]::new(); $rows.Margin = [Windows.Thickness]::new(0, 0, 6, 0); $scroll.Content = $rows
+  [Windows.Controls.Grid]::SetRow($scroll, 1); [void]$listWrap.Children.Add($scroll)
+  [Windows.Controls.Grid]::SetRow($listWrap, 2); [void]$outer.Children.Add($listWrap)
+  # Footer ---------------------------------------------------------------
+  $foot = [Windows.Controls.Grid]::new(); $foot.Margin = [Windows.Thickness]::new(0, 10, 0, 0)
+  foreach ($width in @('*', 'Auto')) {
+    $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$foot.ColumnDefinitions.Add($cd)
+  }
+  $count = New-QmText '' (9.5 * $k) $t.faint; $count.VerticalAlignment = 'Center'; [void]$foot.Children.Add($count)
+  $done = New-QmThemedButton '完成' $skin $true; $done.MinWidth = 82; $done.IsDefault = $true; $done.IsCancel = $true
+  $done.Add_Click({ param($sender, $eventArgs) $script:UI.claimsWin.Hide() })
+  [Windows.Controls.Grid]::SetColumn($done, 1); [void]$foot.Children.Add($done)
+  [Windows.Controls.Grid]::SetRow($foot, 3); [void]$outer.Children.Add($foot)
+  $w.Content = $outer
+  $w.Add_Closing({ param($sender, $e) if (-not $script:QM_SHUTDOWN -and $sender.Tag -ne 'dispose') { $e.Cancel = $true; $sender.Hide() } })
+  $script:QM_CLAIMS_REFS = @{
+    Name = $name; Plan = $plan; PlanText = $planText; StatePill = $statePill; State = $stateText
+    Balance = $balance; Today = $today; TodaySub = $todaySub; Detail = $detail
+    List = $rows; ListNote = $listNote; Count = $count
+  }
+  return $w
+}
+
+function Sync-QmClaimHistory {
+  if (-not $script:UI.claimsWin -or -not $script:QM_CLAIMS_REFS) { return }
+  $refs = $script:QM_CLAIMS_REFS; $s = Get-QmAccountStatus; $t = $script:QM_SKINS[(Resolve-QmSkin $script:CFG.skin)]; $k = Get-QmScale
+  $running = [bool]$script:ACCOUNT.Running
+  $pillText = '读取中'; $pillInk = $t.gray; $pillTint = $t.grayTint
+  if ($running) { $pillText = '领取中'; $pillInk = $t.gold; $pillTint = $t.goldTint }
+  elseif ($s.State -eq 'ok' -and $s.Claimable.Count -gt 0) { $pillText = '可领 ' + $s.Claimable.Count + ' 项'; $pillInk = $t.gold; $pillTint = $t.goldTint }
+  elseif ($s.State -eq 'ok') { $pillText = '已连接'; $pillInk = $t.green; $pillTint = $t.greenTint }
+  elseif ($s.State -eq 'noauth') { $pillText = '未登录'; $pillInk = $t.gray; $pillTint = $t.grayTint }
+  elseif ($s.State -eq 'error') { $pillText = '读取失败'; $pillInk = $t.red; $pillTint = $t.grayTint }
+  $refs.State.Text = $pillText; $refs.State.Foreground = Get-QmBrush $pillInk; $refs.StatePill.Background = Get-QmBrush $pillTint
+  $refs.Name.Text = $(if ($s.Name) { $s.Name } else { 'Qoder 账户' })
+  if ($s.Plan) { $refs.PlanText.Text = $s.Plan; $refs.Plan.Visibility = 'Visible' } else { $refs.Plan.Visibility = 'Collapsed' }
+  $refs.Balance.Text = $(if ($s.State -eq 'ok') { Format-QmNum $s.Balance } else { '—' })
+  $refs.Today.Text = '+'+ (Format-QmNum $s.TodayAmount)
+  $refs.Today.Foreground = Get-QmBrush $(if ($s.TodayAmount -gt 0) { $t.green } else { $t.faint })
+  $refs.TodaySub.Text = $(if ($s.TodayCount -gt 0) { '今日已领 · ' + $s.TodayCount + ' 项' } else { '今日暂无领取' })
   $lines = New-Object System.Collections.Generic.List[string]
-  $s = Get-QmAccountStatus
-  $lines.Add('账户：' + $(if ($s.Name) { $s.Name } else { '—' }) + ' · ' + $s.Plan)
-  $lines.Add('余额：' + (Format-QmNum $s.Balance) + '（' + (Format-QmBalanceDetail $s) + '）')
-  foreach ($p in $s.Packages) { $lines.Add($p.Title + '：' + (Format-QmNum $p.Remaining) + ' / ' + (Format-QmNum $p.Total) + $(if ($p.ExpiresAt) { ' · ' + (Format-QmExpiry $p.ExpiresAt) + ' 到期' } else { '' })) }
-  $lines.Add('')
-  $lines.Add('最近领取')
+  if ($s.State -eq 'noauth') { $lines.Add('未登录：' + $s.Message); $lines.Add('在 Qoder 客户端登录后自动读取余额与权益。') }
+  elseif ($s.State -eq 'error') { $lines.Add('账号读取失败：' + $s.Message) }
+  elseif ($s.State -eq 'ok') {
+    $lines.Add('余额构成：' + (Format-QmBalanceDetail $s))
+    foreach ($p in $s.Packages) { $lines.Add($p.Title + '：' + (Format-QmNum $p.Remaining) + ' / ' + (Format-QmNum $p.Total) + $(if ($p.ExpiresAt) { ' · ' + (Format-QmExpiry $p.ExpiresAt) + ' 到期' } else { '' })) }
+    if ($s.Claimable.Count -gt 0) { $lines.Add('待领取 ' + $s.Claimable.Count + ' 项') }
+  } else { $lines.Add('正在读取账户余额与可领权益…') }
+  if ($s.Message -and $s.State -notin @('noauth', 'error')) { $lines.Add('状态：' + $s.Message) }
+  $refs.Detail.Text = $lines -join "`n"
+  # Rows are rebuilt from the local ledger; no network request is made here.
   $entries = (Get-QmClaims).Entries.ToArray()
-  $any = $false
-  for ($i = $entries.Count - 1; $i -ge 0 -and $i -ge $entries.Count - 40; $i--) {
-    $e = $entries[$i]; $any = $true
-    $lines.Add($e.day + '  ' + $e.title + '  +' + (Format-QmNum ([long]$e.amount)) + $(if ($e.scope) { '（' + (Format-QmScope ([string]$e.scope)) + '）' } else { '' }))
+  $total = 0L; foreach ($e in $entries) { $total += [long]$e.amount }
+  $refs.Count.Text = $(if ($entries.Count) { '共 ' + $entries.Count + ' 条记录 · 累计 +' + (Format-QmNum $total) + ' · 最多保留 400 条' } else { '记录保存在本机 · 最多保留 400 条' })
+  # The window can stay open while auto-claim adds records; only the row list needs
+  # a rebuild, and only when its contents actually change.
+  $rowSig = [string]$entries.Count + '|' + (Get-QmCampaignDay) + '|' + $(if ($entries.Count) { [string]$entries[$entries.Count - 1].claimedAt } else { '' })
+  if ($refs.RowSignature -ceq $rowSig) { return }
+  $refs.RowSignature = $rowSig
+  $refs.List.Children.Clear()
+  if (-not $entries.Count) {
+    $refs.ListNote.Text = '按天分组'
+    $empty = [Windows.Controls.StackPanel]::new(); $empty.HorizontalAlignment = 'Center'; $empty.Margin = [Windows.Thickness]::new(0, 36, 0, 0)
+    $circle = [Windows.Controls.Border]::new(); $circle.Width = 46; $circle.Height = 46; $circle.CornerRadius = [Windows.CornerRadius]::new(23)
+    $circle.Background = Get-QmBrush $t.goldTint; $circle.HorizontalAlignment = 'Center'
+    $glyph = New-QmText ([string][char]0xE719) 18 $t.gold 'SemiBold'; $glyph.FontFamily = [Windows.Media.FontFamily]::new('Segoe MDL2 Assets'); $glyph.HorizontalAlignment = 'Center'; $glyph.VerticalAlignment = 'Center'
+    $circle.Child = $glyph; [void]$empty.Children.Add($circle)
+    $emptyTitle = New-QmText '暂无领取记录' (13 * $k) $t.text 'SemiBold'; $emptyTitle.HorizontalAlignment = 'Center'; $emptyTitle.Margin = [Windows.Thickness]::new(0, 12, 0, 0); [void]$empty.Children.Add($emptyTitle)
+    $emptyText = New-QmText '开启自动领取后，每日积分与活动补给包会在这里留下记录。' (10.5 * $k) $t.faint
+    $emptyText.TextWrapping = 'Wrap'; $emptyText.TextTrimming = 'None'; $emptyText.TextAlignment = 'Center'; $emptyText.MaxWidth = 290
+    $emptyText.HorizontalAlignment = 'Center'; $emptyText.Margin = [Windows.Thickness]::new(0, 6, 0, 0); [void]$empty.Children.Add($emptyText)
+    [void]$refs.List.Children.Add($empty)
+    return
   }
-  if (-not $any) { $lines.Add('（暂无记录；从本版开始自动记录）') }
-  if ($s.Message) { $lines.Add(''); $lines.Add('状态：' + $s.Message) }
-  $script:UI.claimsWin.Content.Text = $lines -join "`r`n"
+  $groups = [ordered]@{}; $shown = 0
+  for ($i = $entries.Count - 1; $i -ge 0 -and $shown -lt 40; $i--) {
+    $e = $entries[$i]; $day = [string]$e.day
+    if (-not $groups.Contains($day)) { $groups[$day] = New-Object System.Collections.Generic.List[object] }
+    $groups[$day].Add($e); $shown++
+  }
+  $refs.ListNote.Text = '最近 ' + $shown + ' 条'
+  $todayKey = Get-QmCampaignDay; $yesterdayKey = (Get-QmCstNow).AddDays(-1).AddHours(-10).ToString('yyyy-MM-dd')
+  $first = $true
+  $orderedDays = @($groups.Keys | Sort-Object -Descending)
+  foreach ($day in $orderedDays) {
+    $label = $day; $dateText = ''
+    try {
+      $parsed = [datetime]::ParseExact($day, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+      $dateText = $parsed.ToString('MM-dd') + ' ' + (Format-QmClaimWeekday $parsed)
+      if ($day -eq $todayKey) { $label = '今天' } elseif ($day -eq $yesterdayKey) { $label = '昨天' } else { $label = $parsed.ToString('MM-dd'); $dateText = Format-QmClaimWeekday $parsed }
+    } catch { }
+    $dayTotal = 0L; foreach ($e in $groups[$day]) { $dayTotal += [long]$e.amount }
+    $dayHead = [Windows.Controls.Grid]::new(); $dayHead.Margin = [Windows.Thickness]::new(2, $(if ($first) { 0 } else { 12 }), 2, 6)
+    foreach ($width in @('Auto', 'Auto', '*', 'Auto')) {
+      $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$dayHead.ColumnDefinitions.Add($cd)
+    }
+    $dayLabel = New-QmText $label (11.5 * $k) $(if ($day -eq $todayKey) { $t.green } else { $t.text }) 'SemiBold'; [void]$dayHead.Children.Add($dayLabel)
+    if ($dateText) {
+      $dayDate = New-QmText $dateText (9.5 * $k) $t.faint; $dayDate.Margin = [Windows.Thickness]::new(8, 0, 0, 0)
+      [Windows.Controls.Grid]::SetColumn($dayDate, 1); [void]$dayHead.Children.Add($dayDate)
+    }
+    $daySum = New-QmText ('+' + (Format-QmNum $dayTotal)) (11 * $k) $t.green 'SemiBold' $true; $daySum.HorizontalAlignment = 'Right'
+    [Windows.Controls.Grid]::SetColumn($daySum, 3); [void]$dayHead.Children.Add($daySum)
+    [void]$refs.List.Children.Add($dayHead)
+    foreach ($e in $groups[$day]) {
+      $row = [Windows.Controls.Border]::new(); $row.Background = Get-QmBrush $t.track; $row.CornerRadius = [Windows.CornerRadius]::new(9)
+      $row.Padding = [Windows.Thickness]::new(11, 8, 11, 8); $row.Margin = [Windows.Thickness]::new(0, 0, 0, 6)
+      $rg = [Windows.Controls.Grid]::new()
+      foreach ($width in @('*', 'Auto')) {
+        $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$rg.ColumnDefinitions.Add($cd)
+      }
+      $stack = [Windows.Controls.StackPanel]::new()
+      $titleRow = [Windows.Controls.Grid]::new()
+      foreach ($width in @('*', 'Auto')) {
+        $cd = [Windows.Controls.ColumnDefinition]::new(); $cd.Width = [Windows.GridLengthConverter]::new().ConvertFromString($width); [void]$titleRow.ColumnDefinitions.Add($cd)
+      }
+      $title = New-QmText ([string]$e.title) (11.8 * $k) $t.text 'Medium'; [void]$titleRow.Children.Add($title)
+      $scope = Format-QmScope ([string]$e.scope)
+      if ($scope) {
+        $chip = [Windows.Controls.Border]::new(); $chip.CornerRadius = [Windows.CornerRadius]::new(6); $chip.Padding = [Windows.Thickness]::new(6, 1, 6, 1); $chip.VerticalAlignment = 'Center'; $chip.Margin = [Windows.Thickness]::new(8, 0, 0, 0)
+        $isSota = [string]$e.scope -eq 'C_S_U_SERIES'
+        $chip.Background = Get-QmBrush $(if ($isSota) { $t.goldTint } else { $t.blueTint })
+        $chip.Child = New-QmText $scope (8.5 * $k) $(if ($isSota) { $t.gold } else { $t.blue }) 'Medium'
+        [Windows.Controls.Grid]::SetColumn($chip, 1); [void]$titleRow.Children.Add($chip)
+      }
+      [void]$stack.Children.Add($titleRow)
+      $metaBits = @()
+      $time = Format-QmClaimTime ([string]$e.claimedAt); if ($time) { $metaBits += $time + ' 领取' }
+      $expiry = Format-QmClaimExpiry ([string]$e.expiresAt); if ($expiry) { $metaBits += '有效至 ' + $expiry }
+      if ($metaBits.Count) {
+        $meta = New-QmText ($metaBits -join ' · ') (9.5 * $k) $t.faint; $meta.Margin = [Windows.Thickness]::new(0, 3, 0, 0); [void]$stack.Children.Add($meta)
+      }
+      [void]$rg.Children.Add($stack)
+      $amount = New-QmText ('+' + (Format-QmNum ([long]$e.amount))) (13.5 * $k) $t.green 'SemiBold' $true
+      $amount.VerticalAlignment = 'Center'; $amount.Margin = [Windows.Thickness]::new(10, 0, 0, 0)
+      [Windows.Controls.Grid]::SetColumn($amount, 1); [void]$rg.Children.Add($amount)
+      $row.Child = $rg; [void]$refs.List.Children.Add($row)
+    }
+    $first = $false
+  }
+}
+
+function Show-QmClaimHistory {
+  $skin = Resolve-QmSkin $script:CFG.skin
+  if ($script:UI.claimsWin -and $script:UI.claimsWin.Resources['QmResolvedSkin'] -ne $skin) {
+    $old = $script:UI.claimsWin
+    $width = $old.Width; $height = $old.Height; $left = $old.Left; $top = $old.Top
+    $old.Tag = 'dispose'; $old.Close()
+    $script:UI.claimsWin = New-QmClaimHistoryWindow
+    $script:UI.claimsWin.Width = $width; $script:UI.claimsWin.Height = $height
+    if (-not [double]::IsNaN($left) -and -not [double]::IsNaN($top)) {
+      $script:UI.claimsWin.WindowStartupLocation = 'Manual'; $script:UI.claimsWin.Left = $left; $script:UI.claimsWin.Top = $top
+    }
+  }
+  if (-not $script:UI.claimsWin) { $script:UI.claimsWin = New-QmClaimHistoryWindow }
+  Sync-QmClaimHistory
   $script:UI.claimsWin.Show(); [void]$script:UI.claimsWin.Activate()
 }

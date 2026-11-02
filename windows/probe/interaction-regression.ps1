@@ -6,6 +6,7 @@ $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseF
 foreach($fn in $ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst]},$false)){. ([scriptblock]::Create($fn.Extent.Text))}
 $temp=Join-Path $env:TEMP ('qm-ui-'+[guid]::NewGuid());[void][IO.Directory]::CreateDirectory($temp)
 $script:CFG_PATH=Join-Path $temp 'settings.json';$script:CFG=New-QmConfig
+$script:CFG.display.tools=$true # keep the tools slot for the cross-session assertion below
 $script:QM_CLAIMS_PATH=Join-Path $temp 'claims.json';$script:QM_CLAIMS=$null
 $script:ACCOUNT=@{Auth=$null;Usage=$null;Campaigns=$null;Running=$false;Error='';UsageAt=0L;CampAt=0L;NextTry=0L;LastFail=@{};Notified=$null;At=''}
 $script:UI=@{win=(New-QmWindow);sig='';skin='paper';settings=$null;builds=0;tray=$null;dragging=$false}

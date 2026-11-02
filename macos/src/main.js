@@ -38,8 +38,26 @@ let BAR_H_BOTTOM = 32;
 const CARD_W = 246;
 const CARD_H = 220;
 const POLL_SECONDS = 0.6;
-const STATS_PAGE_SIZE = 5;
+const STATS_PAGE_SIZE = 6;
+const STATS_TREND_MAX = 12;
 const STATS_CACHE_MS = 10 * 60 * 1000;
+
+/* 统计面板的图文仪表盘骨架。所有纵向坐标都从顶部起算，再经 top(t, h)
+ * 换算成 AppKit 的自下而上坐标；测量与绘制共用这些常量，避免面板高度
+ * 与实际控件位置漂移。 */
+const STATS_CONTENT_TOP = 132;
+const STATS_CARD_H = 56;
+const STATS_SECTION_TITLE_H = 20;
+const STATS_TREND_H = 96;
+const STATS_MODEL_ROW_H = 19;
+const STATS_SUMMARY_TITLE_H = 18;
+const STATS_SUMMARY_ROW_H = 16;
+const STATS_DETAIL_ROW_H = 42;
+const STATS_NAV_H = 28;
+const STATS_FOOTER_H = 26;
+const STATS_SECTION_GAP = 12;
+const STATS_TIGHT_GAP = 8;
+const STATS_BOTTOM_PAD = 12;
 
 const STATS_RANGES = [
   { id: '7d', label: '7 天' },
@@ -52,6 +70,25 @@ const STATS_MODES = [
   { id: 'hover', label: '悬停显示' },
   { id: 'direct', label: '直接显示' },
   { id: 'paged', label: '分页显示' }
+];
+
+/* macOS 的状态条图标没有右键，视图切换必须能在面板里直接点到。 */
+const STATS_VIEWS = [
+  { id: 'overview', label: '总览', tip: '趋势图、模型构成与自动摘要' },
+  { id: 'detail', label: '明细', tip: '逐期分页明细' }
+];
+
+const STATS_SUMMARY_WINDOWS = [
+  { id: 'today', label: '今天', prev: '较昨日' },
+  { id: 'week7', label: '近 7 天', prev: '较上 7 天' },
+  { id: 'month', label: '本月', prev: '较上月同期' },
+  { id: 'all', label: '全部', prev: '较上期' }
+];
+
+const STATS_GROUPS = [
+  { id: 'day', label: '按日', unit: '天', tip: '按自然日汇总积分与 Token' },
+  { id: 'week', label: '按周', unit: '周', tip: '按周一至周日汇总积分与 Token' },
+  { id: 'month', label: '按月', unit: '个月', tip: '按自然月汇总积分与 Token' }
 ];
 
 /* Qoder 的本地日志只写内部模型 id（如 dfmodel）。这些是 Qoder 自带的
@@ -239,6 +276,8 @@ const state = {
   tokenUnit: 'latin',
   statsMode: 'hover',
   statsRange: '7d',
+  statsGroup: 'day',
+  statsView: 'overview',
   statsHidden: false,
   statsPreview: false,
   statsPinned: false,
@@ -248,6 +287,7 @@ const state = {
   statsSuppress: false,
   statsPage: 0,
   statsToggleAt: 0,
+  statsHint: '',
   statsCache: null,
   statsData: null,
   frontIsQoder: false,
@@ -349,6 +389,7 @@ let settingsFontPopup = null;
 let settingsTokenUnitPopup = null;
 let settingsFieldChecks = [];
 let statsPanel = null;
+let statsFooterNote = null;
 let statsPillBox = null;
 let statsIconView = null;
 let statsButtonRect = null;
@@ -640,6 +681,13 @@ function loadSettings() {
           if (STATS_RANGES[i].id === obj.statsRange) state.statsRange = obj.statsRange;
         }
       }
+      if (obj.statsGroup) {
+        for (let i = 0; i < STATS_GROUPS.length; i++) {
+          if (STATS_GROUPS[i].id === obj.statsGroup) state.statsGroup = obj.statsGroup;
+        }
+      }
+      // 非法或缺失的 statsView 一律回到总览，保证重开面板的默认形态稳定。
+      state.statsView = statsViewModel(obj.statsView);
     }
     const fm = $.NSFileManager.defaultManager;
     state.autoStart = !!fm.fileExistsAtPath(WATCH_PLIST);
@@ -664,6 +712,8 @@ function saveSettings() {
       tokenUnit: state.tokenUnit,
       statsMode: state.statsMode,
       statsRange: state.statsRange,
+      statsGroup: state.statsGroup,
+      statsView: statsViewModel(state.statsView),
       bottomAutoHide: state.bottomAutoHide
     };
     const s = $.NSString.alloc.initWithString(JSON.stringify(obj, null, 2));
@@ -973,6 +1023,112 @@ function statsForRange(range) {
   };
 }
 
+function statsGroupMeta(id) {
+  for (let i = 0; i < STATS_GROUPS.length; i++) {
+    if (STATS_GROUPS[i].id === id) return STATS_GROUPS[i];
+  }
+  return STATS_GROUPS[0];
+}
+
+function statsDayDate(key) {
+  const p = String(key).split('-');
+  return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+}
+
+/* Weeks are local Monday–Sunday buckets. Building the key from calendar
+ * fields keeps the boundary stable across DST changes, unlike millisecond
+ * arithmetic. */
+function statsWeekKey(key) {
+  const d = statsDayDate(key);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return dateKey(d);
+}
+
+function statsPeriodKey(group, key) {
+  if (group === 'week') return statsWeekKey(key);
+  if (group === 'month') return key.slice(0, 7);
+  return key;
+}
+
+function statsPeriodLabel(group, key) {
+  const now = new Date();
+  if (group === 'day') return dayLabel(key);
+  if (group === 'week') {
+    const start = statsDayDate(key);
+    const current = statsDayDate(dateKey(now));
+    current.setDate(current.getDate() - ((current.getDay() + 6) % 7));
+    if (key === dateKey(current)) return '本周';
+    const prev = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 7);
+    if (key === dateKey(prev)) return '上周';
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    return fmtDateShort(start) + ' ~ ' + fmtDateShort(end);
+  }
+  const currentMonth = dateKey(now).slice(0, 7);
+  if (key === currentMonth) return '本月';
+  const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  if (key === dateKey(prevMonth).slice(0, 7)) return '上月';
+  if (Number(key.slice(0, 4)) === now.getFullYear()) return Number(key.slice(5, 7)) + ' 月';
+  return key;
+}
+
+function statsPeriodTip(group, key, period) {
+  if (group === 'week') {
+    const start = statsDayDate(key);
+    const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+    return dateKey(start) + ' ~ ' + dateKey(end) + ' · ' + period.activeDays + ' 天有记录';
+  }
+  return key + ' · ' + period.activeDays + ' 天有记录';
+}
+
+function statsPeriods(data, group) {
+  const map = {};
+  const periods = [];
+  for (let i = 0; i < data.days.length; i++) {
+    const day = data.days[i];
+    const key = statsPeriodKey(group, day.key);
+    let period = map[key];
+    if (!period) {
+      period = map[key] = {
+        key: key, credits: 0, tokens: 0, requests: 0, estimated: false,
+        activeDays: 0, models: [], modelMap: {}
+      };
+      periods.push(period);
+    }
+    period.credits += day.credits;
+    period.tokens += day.tokens;
+    period.requests += day.requests;
+    period.activeDays++;
+    if (day.estimated) period.estimated = true;
+    for (let j = 0; j < day.models.length; j++) {
+      const m = day.models[j];
+      let pm = period.modelMap[m.name];
+      if (!pm) {
+        pm = period.modelMap[m.name] = {
+          name: m.name, credits: 0, tokens: 0, estimated: false
+        };
+        period.models.push(pm);
+      }
+      pm.credits += m.credits;
+      pm.tokens += m.tokens;
+      if (m.estimated) pm.estimated = true;
+    }
+  }
+  for (let i = 0; i < periods.length; i++) {
+    periods[i].models.sort(function (a, b) {
+      return b.credits - a.credits || b.tokens - a.tokens;
+    });
+    delete periods[i].modelMap;
+  }
+  periods.sort(function (a, b) { return b.key.localeCompare(a.key); });
+  return periods;
+}
+
+function statsDirectText(group) {
+  if (group === 'week') return '最近 ' + STATS_PAGE_SIZE + ' 周';
+  if (group === 'month') return '最近 ' + STATS_PAGE_SIZE + ' 个月';
+  return '最近 ' + STATS_PAGE_SIZE + ' 天';
+}
+
 function fmtStatsTokens(v) {
   if (!v || v <= 0) return '0';
   return fmtToken(v);
@@ -982,6 +1138,289 @@ function dayLabel(key) {
   const today = dateKey(new Date());
   if (key === today) return '今天';
   return key.slice(5);
+}
+
+/* ------------------------------------------------------------ stats view */
+
+function statsViewModel(id) {
+  for (let i = 0; i < STATS_VIEWS.length; i++) {
+    if (STATS_VIEWS[i].id === id) return STATS_VIEWS[i].id;
+  }
+  return STATS_VIEWS[0].id;
+}
+
+function statsViewMeta(id) {
+  const view = statsViewModel(id);
+  for (let i = 0; i < STATS_VIEWS.length; i++) {
+    if (STATS_VIEWS[i].id === view) return STATS_VIEWS[i];
+  }
+  return STATS_VIEWS[0];
+}
+
+function statsSummaryMeta(id) {
+  for (let i = 0; i < STATS_SUMMARY_WINDOWS.length; i++) {
+    if (STATS_SUMMARY_WINDOWS[i].id === id) return STATS_SUMMARY_WINDOWS[i];
+  }
+  return STATS_SUMMARY_WINDOWS[0];
+}
+
+/* Calendar-day arithmetic: setDate keeps local days intact across DST, and
+ * every key comparison below stays on invariant "yyyy-MM-dd" strings. */
+function statsShiftKey(key, days) {
+  const d = statsDayDate(key);
+  d.setDate(d.getDate() + days);
+  return dateKey(d);
+}
+
+function statsDaySpan(startKey, endKey) {
+  const span = Math.round(
+    (statsDayDate(endKey).getTime() - statsDayDate(startKey).getTime()) / 86400000) + 1;
+  return Math.max(1, span);
+}
+
+/* One local day record from the JSONL scan, with raw model ids already
+ * mapped to their friendly labels. Invalid dates and negative totals drop. */
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function statsCacheRows(cache) {
+  const rows = [];
+  const days = cache && cache.days && typeof cache.days === 'object' ? cache.days : null;
+  if (!days) return rows;
+  const keys = Object.keys(days);
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (!DAY_KEY_RE.test(key)) continue;
+    // "2026-10-32" is well-formed but not a real local day; the round trip
+    // through the calendar rejects it, so 全部 only spans valid dates.
+    const stamp = statsDayDate(key);
+    if (!isFinite(stamp.getTime()) || dateKey(stamp) !== key) continue;
+    const src = days[key];
+    if (!src || typeof src !== 'object') continue;
+    const credits = Number(src.credits);
+    const tokens = Number(src.tokens);
+    const requests = Number(src.requests);
+    if (!isFinite(credits) || !isFinite(tokens) || !isFinite(requests)) continue;
+    if (credits < 0 || tokens < 0 || requests < 0) continue;
+    const merged = {};
+    const modelList = [];
+    const raw = src.models && typeof src.models === 'object' ? src.models : {};
+    const names = Object.keys(raw);
+    for (let j = 0; j < names.length; j++) {
+      const m = raw[names[j]];
+      if (!m || typeof m !== 'object') continue;
+      const mc = Number(m.credits);
+      const mt = Number(m.tokens);
+      if (!isFinite(mc) || !isFinite(mt) || mc < 0 || mt < 0) continue;
+      const display = friendlyModelName(names[j]);
+      if (!merged[display]) {
+        merged[display] = { name: display, credits: 0, tokens: 0, estimated: false };
+      }
+      merged[display].credits += mc;
+      merged[display].tokens += mt;
+      if (m.estimated) merged[display].estimated = true;
+    }
+    const mergedNames = Object.keys(merged);
+    for (let j = 0; j < mergedNames.length; j++) modelList.push(merged[mergedNames[j]]);
+    modelList.sort(function (a, b) {
+      return b.credits - a.credits || b.tokens - a.tokens || a.name.localeCompare(b.name);
+    });
+    rows.push({ key: key, credits: credits, tokens: tokens, requests: requests,
+      estimated: !!src.estimated, models: modelList });
+  }
+  rows.sort(function (a, b) { return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0); });
+  return rows;
+}
+
+function statsWindowTotals(rows, startKey, endKey) {
+  const models = {};
+  let credits = 0;
+  let tokens = 0;
+  let requests = 0;
+  let estimated = false;
+  let activeDays = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.key < startKey || row.key > endKey) continue;
+    credits += row.credits;
+    tokens += row.tokens;
+    requests += row.requests;
+    activeDays++;
+    if (row.estimated) estimated = true;
+    for (let j = 0; j < row.models.length; j++) {
+      const m = row.models[j];
+      if (!models[m.name]) {
+        models[m.name] = { name: m.name, credits: 0, tokens: 0, estimated: false };
+      }
+      models[m.name].credits += m.credits;
+      models[m.name].tokens += m.tokens;
+      if (m.estimated) models[m.name].estimated = true;
+    }
+  }
+  const list = Object.keys(models).map(function (k) { return models[k]; });
+  list.sort(function (a, b) {
+    return b.credits - a.credits || b.tokens - a.tokens || a.name.localeCompare(b.name);
+  });
+  return { start: startKey, end: endKey, credits: credits, tokens: tokens,
+    requests: requests, estimated: estimated, activeDays: activeDays, models: list };
+}
+
+/* The four auto summaries are fixed windows, independent of the range pick:
+ * today, the trailing 7 days, this calendar month and every valid date the
+ * local cache still holds. */
+function statsSummaryRanges(rows, todayKey) {
+  const today = todayKey || dateKey(new Date());
+  const out = [];
+  out.push({ id: 'today', start: today, end: today });
+  out.push({ id: 'week7', start: statsShiftKey(today, -6), end: today });
+  out.push({ id: 'month', start: today.slice(0, 7) + '-01', end: today });
+  let allStart = today;
+  let allEnd = today;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].key < allStart) allStart = rows[i].key;
+    if (rows[i].key > allEnd) allEnd = rows[i].key;
+  }
+  out.push({ id: 'all', start: allStart, end: allEnd });
+  return out;
+}
+
+/* Percent change against the immediately preceding window of the same day
+ * span. A zero previous window must never divide; wording matches the
+ * Windows dashboard. */
+function statsChangeNote(current, previous, prefix) {
+  if (!(previous > 0)) {
+    return prefix + ' ' + (current > 0 ? '新增' : '上期无记录');
+  }
+  const pct = Math.round(Math.abs(((current - previous) / previous) * 100));
+  if (pct === 0) return prefix + ' 基本持平';
+  return prefix + ' ' + (current > previous ? '+' : '-') + pct + '%';
+}
+
+function statsSummaryLine(window, rows) {
+  const meta = statsSummaryMeta(window.id);
+  const totals = statsWindowTotals(rows, window.start, window.end);
+  if (!totals.activeDays) {
+    return { id: meta.id, label: meta.label, start: window.start, end: window.end,
+      text: meta.label + ' · 暂无用量记录', hasData: false, totals: totals,
+      previous: null, change: '' };
+  }
+  const span = statsDaySpan(window.start, window.end);
+  const previous = statsWindowTotals(rows,
+    statsShiftKey(window.start, -span), statsShiftKey(window.start, -1));
+  const parts = [meta.label, fmtCredits(totals.credits) + ' 积分',
+    (totals.estimated ? '≈ ' : '') + fmtStatsTokens(totals.tokens) + ' Token',
+    fmtCount(totals.requests) + ' 请求', '活跃 ' + totals.activeDays + ' 天'];
+  if (meta.id === 'all') {
+    parts.push('日均 ' + fmtCredits(totals.credits / totals.activeDays) + ' 积分');
+  }
+  const change = statsChangeNote(totals.credits, previous.credits, meta.prev);
+  parts.push(change);
+  if (totals.models.length) parts.push('主力 ' + totals.models[0].name);
+  return { id: meta.id, label: meta.label, start: window.start, end: window.end,
+    text: parts.join(' · '), hasData: true, totals: totals, previous: previous,
+    change: change };
+}
+
+function statsAutoSummary(rows, todayKey) {
+  const list = rows || [];
+  const windows = statsSummaryRanges(list, todayKey);
+  return windows.map(function (w) { return statsSummaryLine(w, list); });
+}
+
+/* Trend series: the most recent periods at the current granularity, capped
+ * at STATS_TREND_MAX and handed to the renderer oldest first so the bars
+ * read left → right as time moves forward. */
+function statsTrendLabel(group, key) {
+  if (group === 'month') return Number(key.slice(5, 7)) + '月';
+  if (group === 'week') return key.slice(5);
+  return dayLabel(key) === '今天' ? '今天' : key.slice(5);
+}
+
+function statsTrend(data, group, limit) {
+  const max = Math.max(1, Math.min(STATS_TREND_MAX,
+    Math.floor(Number(limit) || STATS_TREND_MAX)));
+  const periods = statsPeriods(data || { days: [] }, statsGroupMeta(group).id).slice(0, max);
+  periods.reverse();
+  let basis = 'credits';
+  let total = 0;
+  for (let i = 0; i < periods.length; i++) total += periods[i].credits;
+  if (!(total > 0)) {
+    basis = 'tokens';
+    total = 0;
+    for (let i = 0; i < periods.length; i++) total += periods[i].tokens;
+  }
+  let peak = 0;
+  for (let i = 0; i < periods.length; i++) {
+    const value = basis === 'credits' ? periods[i].credits : periods[i].tokens;
+    if (value > peak) peak = value;
+  }
+  const bars = [];
+  for (let i = 0; i < periods.length; i++) {
+    const p = periods[i];
+    const value = basis === 'credits' ? p.credits : p.tokens;
+    bars.push({ key: p.key, label: statsTrendLabel(statsGroupMeta(group).id, p.key),
+      value: value, credits: p.credits, tokens: p.tokens, requests: p.requests,
+      activeDays: p.activeDays, estimated: p.estimated, models: p.models,
+      ratio: peak > 0 ? value / peak : 0,
+      tip: statsPeriodTip(statsGroupMeta(group).id, p.key, p) });
+  }
+  return { basis: basis, total: total, peak: peak, count: bars.length, bars: bars };
+}
+
+/* Model mix: credits drive the share whenever they exist, otherwise fall
+ * back to tokens so an estimate-only day still draws a bar. */
+function statsModelShares(models) {
+  const list = models || [];
+  const rows = statsModelRows({ models: list });
+  let basis = 'credits';
+  let total = 0;
+  for (let i = 0; i < list.length; i++) total += list[i].credits;
+  if (!(total > 0)) {
+    basis = 'tokens';
+    total = 0;
+    for (let i = 0; i < list.length; i++) total += list[i].tokens;
+  }
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const value = basis === 'credits' ? r.credits : r.tokens;
+    out.push({ name: r.name, credits: r.credits, tokens: r.tokens,
+      estimated: r.estimated, basis: basis, value: value,
+      share: total > 0 ? value / total : 0 });
+  }
+  return { basis: basis, total: total, count: list.length, rows: out };
+}
+
+function statsPageCount(total, size) {
+  const step = Math.max(1, Number(size) || STATS_PAGE_SIZE);
+  return Math.max(1, Math.ceil(Math.max(0, Number(total) || 0) / step));
+}
+
+function statsPageRows(periods, page, size) {
+  const step = Math.max(1, Number(size) || STATS_PAGE_SIZE);
+  const list = periods || [];
+  const count = statsPageCount(list.length, step);
+  const current = Math.max(0, Math.min(Number(page) || 0, count - 1));
+  return { page: current, pageCount: count, pageSize: step,
+    rows: list.slice(current * step, current * step + step) };
+}
+
+function statsOverviewHeight(modelRowCount) {
+  let cy = STATS_CONTENT_TOP;
+  cy += STATS_CARD_H + STATS_SECTION_GAP;
+  cy += STATS_SECTION_TITLE_H + STATS_TREND_H + STATS_SECTION_GAP;
+  cy += STATS_SECTION_TITLE_H + Math.max(1, modelRowCount) * STATS_MODEL_ROW_H + STATS_TIGHT_GAP;
+  cy += STATS_SUMMARY_TITLE_H + STATS_SUMMARY_WINDOWS.length * STATS_SUMMARY_ROW_H + STATS_TIGHT_GAP;
+  cy += STATS_FOOTER_H + STATS_BOTTOM_PAD;
+  return cy;
+}
+
+function statsDetailHeight(rowCount, navVisible) {
+  let cy = STATS_CONTENT_TOP;
+  cy += STATS_SECTION_TITLE_H;
+  cy += Math.max(1, rowCount) * STATS_DETAIL_ROW_H;
+  if (navVisible) cy += STATS_NAV_H;
+  cy += 4 + STATS_FOOTER_H + STATS_BOTTOM_PAD;
+  return cy;
 }
 
 function scanRouteFile(path) {  try {
@@ -2470,6 +2909,27 @@ function buildMenu() {
   statsModeItem.setSubmenu(statsModeMenu);
   menu.addItem(statsModeItem);
 
+  const statsGroupMenu = $.NSMenu.alloc.initWithTitle('统计粒度');
+  statsGroupMenu.setAutoenablesItems(false);
+  for (let i = 0; i < STATS_GROUPS.length; i++) {
+    statsGroupMenu.addItem(menuItem(STATS_GROUPS[i].label, 'statsGroupMenu:',
+      state.statsGroup === STATS_GROUPS[i].id, STATS_GROUPS[i].id));
+  }
+  const statsGroupItem = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('统计粒度', '', '');
+  statsGroupItem.setSubmenu(statsGroupMenu);
+  menu.addItem(statsGroupItem);
+
+  /* 状态条图标没有右键，面板里的视图切换同时在菜单里留一份。 */
+  const statsViewMenu = $.NSMenu.alloc.initWithTitle('统计视图');
+  statsViewMenu.setAutoenablesItems(false);
+  for (let i = 0; i < STATS_VIEWS.length; i++) {
+    statsViewMenu.addItem(menuItem(STATS_VIEWS[i].label, 'statsViewMenu:',
+      statsViewModel(state.statsView) === STATS_VIEWS[i].id, STATS_VIEWS[i].id));
+  }
+  const statsViewItem = $.NSMenuItem.alloc.initWithTitleActionKeyEquivalent('统计视图', '', '');
+  statsViewItem.setSubmenu(statsViewMenu);
+  menu.addItem(statsViewItem);
+
   const themeMenu = $.NSMenu.alloc.initWithTitle('外观');
   themeMenu.setAutoenablesItems(false);
   themeMenu.addItem(menuItem('自动（跟随 Qoder）', 'themeAuto:', state.theme === 'auto', null));
@@ -2498,7 +2958,9 @@ function menuSignature() {
   return parts.join('|') + '#' + (state.pinned || '') + '#' + state.sessionId + '#' +
     (state.panelHidden ? 1 : 0) + '#' + state.layout + '#' + state.theme + '#' +
     state.fontSize + '#' + state.tokenUnit + '#' + JSON.stringify(state.display) + '#' +
-    state.statsMode + '#' + state.statsRange + '#' + (state.statsHidden ? 1 : 0) + '#' +
+    state.statsMode + '#' + state.statsRange + '#' + state.statsGroup + '#' +
+    statsViewModel(state.statsView) + '#' +
+    (state.statsHidden ? 1 : 0) + '#' +
     (state.autoStart ? 1 : 0) + '#' + (state.closeWithQoder ? 1 : 0);
 }
 
@@ -2854,7 +3316,7 @@ function statsModelRows(data) {
   return rows;
 }
 
-function statsDayModelsText(day) {
+function statsTopModelsText(day) {
   const parts = [];
   const n = Math.min(2, day.models.length);
   for (let i = 0; i < n; i++) {
@@ -2864,28 +3326,6 @@ function statsDayModelsText(day) {
   }
   if (day.models.length > n) parts.push('+' + (day.models.length - n));
   return parts.join(' · ');
-}
-
-function statsSummary(root, x, y, w, h, data) {
-  root.addSubview(box([x, y, w, h], T.grayTint, 10, 0, null));
-  const cellW = w / 3;
-  for (let i = 1; i < 3; i++) {
-    root.addSubview(box([x + cellW * i, y + 10, 1, h - 20], T.divider, 0, 0, null));
-  }
-  const cells = [
-    { label: '总积分', value: fmtCredits(data.credits), color: T.gold },
-    { label: '总 Token', value: (data.estimated ? '≈ ' : '') + fmtStatsTokens(data.tokens), color: T.soft },
-    { label: '请求数', value: fmtCount(data.requests), color: T.text }
-  ];
-  for (let i = 0; i < cells.length; i++) {
-    const cx = x + cellW * i + 12;
-    root.addSubview(sLabel(cells[i].label, [cx, y + 29, cellW - 20, 14], 11,
-      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
-    const value = sLabel(cells[i].value, [cx, y + 7, cellW - 20, 22], 19,
-      $.NSFontWeightSemibold, cells[i].color);
-    try { value.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
-    root.addSubview(value);
-  }
 }
 
 function statsPick(root, title, x, y, w, h, tag, action, selected, tip) {
@@ -2911,47 +3351,43 @@ function statsNavButton(root, title, x, y, w, action) {
   root.addSubview(b);
 }
 
+function statsPanelWidth() {
+  let screenW = 600;
+  try {
+    screenW = Number($.NSScreen.mainScreen.frame.size.width) || 600;
+  } catch (e) {
+    screenW = 600;
+  }
+  return Math.max(440, Math.min(600, Math.floor(screenW) - 24));
+}
+
 function buildStatsWindow() {
   if (statsPanel) {
     statsPanel.orderOut(null);
     statsPanel = null;
   }
+  statsFooterNote = null;
+  const cache = collectDailyUsage(false);
   const data = statsForRange(state.statsRange);
   state.statsData = data;
+  const view = statsViewModel(state.statsView);
+  const overview = view === 'overview';
   const direct = state.statsMode === 'direct';
-  const modelRows = statsModelRows(data);
-  const totalPages = Math.max(1, Math.ceil(data.days.length / STATS_PAGE_SIZE));
-  state.statsPage = Math.max(0, Math.min(state.statsPage, totalPages - 1));
-  const page = direct ? 0 : state.statsPage;
-  const days = data.days.slice(page * STATS_PAGE_SIZE, page * STATS_PAGE_SIZE + STATS_PAGE_SIZE);
-  const navVisible = !direct && totalPages > 1;
+  const group = statsGroupMeta(state.statsGroup);
+  const periods = statsPeriods(data, group.id);
+  const paging = statsPageRows(periods, direct ? 0 : state.statsPage, STATS_PAGE_SIZE);
+  state.statsPage = paging.page;
+  const rows = paging.rows;
+  const navVisible = !overview && !direct && paging.pageCount > 1;
+  const modelShares = statsModelShares(data.models);
+  const trend = statsTrend(data, group.id, STATS_TREND_MAX);
+  const summaries = statsAutoSummary(statsCacheRows(cache));
 
   const margin = 16;
-  const nameFont = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightMedium);
-  const metricFont = $.NSFont.systemFontOfSizeWeight(19, $.NSFontWeightSemibold);
-  let need = 448;
-  for (let i = 0; i < modelRows.length; i++) {
-    need = Math.max(need, margin + textWidth(modelRows[i].name, nameFont) + 10 + 46 + 10 + 68 + margin);
-  }
-  const tokenValueText = (data.estimated ? '≈ ' : '') + fmtStatsTokens(data.tokens);
-  const summaryTextNeed = Math.max(
-    textWidth(fmtCredits(data.credits), metricFont),
-    textWidth(tokenValueText, metricFont),
-    textWidth(fmtCount(data.requests), metricFont)
-  );
-  need = Math.max(need, margin * 2 + 3 * (summaryTextNeed + 24));
-  const W = Math.max(448, Math.min(600, Math.ceil(need / 2) * 2));
-
-  const modelHeaderTop = 158;
-  const modelRowsTop = 176;
-  const modelRowH = 19;
-  const modelBlockRows = Math.max(1, modelRows.length);
-  const dailyHeaderTop = modelRowsTop + modelBlockRows * modelRowH + 10;
-  const rowsTop = dailyHeaderTop + 18;
-  const rowH = 38;
-  const H = days.length
-    ? rowsTop + days.length * rowH + (navVisible ? 36 : 10)
-    : rowsTop + 26;
+  const W = statsPanelWidth();
+  const periodLabelW = group.id === 'week' ? 124 : (group.id === 'month' ? 92 : 72);
+  const H = overview ? statsOverviewHeight(modelShares.rows.length)
+    : statsDetailHeight(rows.length, navVisible);
 
   statsPanel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
     $.NSMakeRect(0, 0, W, H), 128, $.NSBackingStoreBuffered, false);
@@ -2974,6 +3410,7 @@ function buildStatsWindow() {
   root.addSubview(box([0, 0, W, H], statsSolidBg, 14, 1, T.border));
   root.addSubview(box([margin, H - 2, W - margin * 2, 1], T.highlight, 0, 0, null));
 
+  /* 头部：图表图标 + 标题 + 副标题 + 关闭按钮。 */
   root.addSubview(box([margin, top(10, 24), 24, 24], T.greenTint, 7, 0, null));
   const statsIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(margin + 5.5, top(10, 24) + 5.5, 13, 13));
   const statsImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('chart.bar.xaxis',
@@ -2985,117 +3422,301 @@ function buildStatsWindow() {
   root.addSubview(statsIcon);
   root.addSubview(sLabel('用量统计', [margin + 32, top(7, 20), 200, 20], 16,
     $.NSFontWeightSemibold));
-  root.addSubview(sLabel('本地日志 · 每日积分与单模型用量', [margin + 32, top(27, 14), 300, 14],
+  root.addSubview(sLabel('本地日志 · 趋势图与自动摘要', [margin + 32, top(27, 14), 320, 14],
     11, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
   const close = sButton('×', [W - margin - 24, top(10, 24), 24, 24], 'closeStats:', null);
-  try { close.setBordered(false); close.setFont($.NSFont.systemFontOfSize(15)); } catch (e) {}
+  try {
+    close.setBordered(false);
+    close.setFont($.NSFont.systemFontOfSize(15));
+    close.setToolTip('关闭统计面板');
+  } catch (e) {}
   root.addSubview(close);
 
+  /* 控件行一：视图选择（总览 / 明细）靠左，时间范围靠右。 */
   const ctrlY = top(48, 26);
-  const rangeX = margin;
+  const viewW = 56;
+  const viewGap = 6;
+  for (let i = 0; i < STATS_VIEWS.length; i++) {
+    statsPick(root, STATS_VIEWS[i].label, margin + i * (viewW + viewGap), ctrlY, viewW, 26,
+      i, 'statsViewPick:', view === STATS_VIEWS[i].id, STATS_VIEWS[i].tip);
+  }
   const rangeW = 50;
   const rangeGap = 5;
+  const rangeX = W - margin - (STATS_RANGES.length * rangeW + (STATS_RANGES.length - 1) * rangeGap);
   const shortRangeLabels = ['7 天', '30 天', '本月', '一年'];
   for (let i = 0; i < STATS_RANGES.length; i++) {
     statsPick(root, shortRangeLabels[i] || STATS_RANGES[i].label, rangeX + i * (rangeW + rangeGap),
       ctrlY, rangeW, 26, i, 'statsRangePick:', state.statsRange === STATS_RANGES[i].id,
-      STATS_RANGES[i].label);
+      '范围：' + STATS_RANGES[i].label);
   }
-  const modeX = rangeX + 4 * (rangeW + rangeGap) + 12;
+
+  /* 控件行二：统计粒度靠左，面板显示方式靠右（悬停 / 直接 / 分页保留）。 */
+  const groupY = top(80, 26);
+  const groupW = 50;
+  const groupGap = 5;
+  for (let i = 0; i < STATS_GROUPS.length; i++) {
+    statsPick(root, STATS_GROUPS[i].label, margin + i * (groupW + groupGap),
+      groupY, groupW, 26, i, 'statsGroupPick:', state.statsGroup === STATS_GROUPS[i].id,
+      STATS_GROUPS[i].tip);
+  }
   const modeW = 44;
   const modeGap = 4;
+  const modeX = W - margin - STATS_MODES.length * modeW - (STATS_MODES.length - 1) * modeGap;
   const shortModeLabels = ['悬停', '直接', '分页'];
   for (let i = 0; i < STATS_MODES.length; i++) {
     statsPick(root, shortModeLabels[i] || STATS_MODES[i].label, modeX + i * (modeW + modeGap),
-      ctrlY, modeW, 26, i, 'statsModePick:', state.statsMode === STATS_MODES[i].id,
+      groupY, modeW, 26, i, 'statsModePick:', state.statsMode === STATS_MODES[i].id,
       STATS_MODES[i].label);
   }
-  const refresh = sButton('刷新', [W - margin - 40, ctrlY, 40, 26], 'statsRefresh:', null);
-  try {
-    refresh.setBordered(false);
-    refresh.setFont($.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular));
-  } catch (e) {}
-  root.addSubview(box([W - margin - 40, ctrlY, 40, 26], T.grayTint, 8, 0, null));
-  root.addSubview(refresh);
 
-  root.addSubview(sLabel(statsRangeText(data), [margin, top(80, 14), W - 130, 14], 11,
+  root.addSubview(sLabel(statsRangeText(data), [margin, top(112, 14), W - margin * 2 - 110, 14], 11,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
   const updated = sLabel('更新 ' + fmtClock(state.statsCache ? state.statsCache.at : Date.now()),
-    [W - margin - 96, top(80, 14), 96, 14], 11, $.NSFontWeightRegular,
+    [W - margin - 96, top(112, 14), 96, 14], 11, $.NSFontWeightRegular,
     $.NSColor.tertiaryLabelColor, 2);
   root.addSubview(updated);
 
-  statsSummary(root, margin, top(100, 50), W - margin * 2, 50, data);
-
-  const tokensX = W - margin - 68;
-  const creditsX = tokensX - 10 - 46;
-  root.addSubview(sLabel('按模型 · ' + data.models.length + ' 个',
-    [margin, top(modelHeaderTop, 16), 180, 16], 12, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('积分', [creditsX, top(modelHeaderTop, 16), 46, 16], 11,
-    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2));
-  root.addSubview(sLabel('Token', [tokensX, top(modelHeaderTop, 16), 68, 16], 11,
-    $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2));
-
-  if (!modelRows.length) {
-    root.addSubview(sLabel('暂无模型记录', [margin, top(modelRowsTop, 16), 300, 16], 11,
-      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
-  } else {
-    for (let i = 0; i < modelRows.length; i++) {
-      const m = modelRows[i];
-      const y = top(modelRowsTop + i * modelRowH, 17);
-      const nameLabel = sLabel(m.name, [margin, y, creditsX - margin - 10, 17], 12,
-        $.NSFontWeightMedium, T.text);
-      try { nameLabel.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
-      root.addSubview(nameLabel);
-      const creditsLabel = sLabel(fmtCredits(m.credits), [creditsX, y, 46, 17], 11,
-        $.NSFontWeightRegular, T.soft, 2);
-      root.addSubview(creditsLabel);
-      const tokensLabel = sLabel((m.estimated ? '≈ ' : '') + fmtStatsTokens(m.tokens),
-        [tokensX, y, 68, 17], 11, $.NSFontWeightRegular, T.soft, 2);
-      root.addSubview(tokensLabel);
+  const sectionTitle = function (cy, leftText, rightText) {
+    const rightW = 230;
+    const left = sLabel(leftText, [margin, top(cy, 16), W - margin * 2 - rightW - 8, 16], 12,
+      $.NSFontWeightSemibold);
+    try { left.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+    root.addSubview(left);
+    if (rightText) {
+      const right = sLabel(rightText, [W - margin - rightW, top(cy, 16), rightW, 16], 11,
+        $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2);
+      try { right.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+      root.addSubview(right);
     }
-  }
+  };
 
-  root.addSubview(box([margin, top(dailyHeaderTop - 6, 1), W - margin * 2, 1], T.divider, 0, 0, null));
-  root.addSubview(sLabel(direct ? '按天 · 最近 5 天' : '按天',
-    [margin, top(dailyHeaderTop, 16), 220, 16], 12, $.NSFontWeightSemibold));
-  if (data.days.length) {
-    root.addSubview(sLabel('共 ' + data.days.length + ' 天',
-      [W - margin - 100, top(dailyHeaderTop, 16), 100, 16], 11,
-      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2));
-  }
+  const toolButton = function (cy, title, x, w, action, tip) {
+    root.addSubview(box([x, top(cy, STATS_FOOTER_H), w, STATS_FOOTER_H], T.grayTint, 8, 0, null));
+    const b = sButton(title, [x, top(cy, STATS_FOOTER_H), w, STATS_FOOTER_H], action, null);
+    try {
+      b.setBordered(false);
+      b.setFont($.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightMedium));
+      b.setToolTip(tip);
+    } catch (e) {}
+    root.addSubview(b);
+  };
 
-  if (!days.length) {
-    root.addSubview(sLabel('暂无用量记录', [margin, top(rowsTop, 18), W - margin * 2, 18], 11,
-      $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 2));
-  } else {
-    for (let i = 0; i < days.length; i++) {
-      const d = days[i];
-      const y = top(rowsTop + i * rowH, rowH);
-      const dateLabel = sLabel(dayLabel(d.key), [margin, y + 20, 68, 15], 12,
-        $.NSFontWeightMedium, T.text);
-      root.addSubview(dateLabel);
-      const totalLabel = sLabel(fmtCredits(d.credits) + ' 积分 · ' +
-        (d.estimated ? '≈ ' : '') + fmtStatsTokens(d.tokens) + ' tok',
-        [margin + 76, y + 20, W - margin * 2 - 76, 15], 11, $.NSFontWeightRegular, T.soft, 2);
-      root.addSubview(totalLabel);
-      const modelLabel = sLabel(statsDayModelsText(d), [margin, y + 4, W - margin * 2, 14], 11,
+  /* macOS 的状态条图标没有右键，面板底部必须自带完整出口。 */
+  const footerRow = function (cy) {
+    const actions = [
+      { title: '刷新', w: 54, action: 'statsRefresh:', tip: '重新扫描本地日志后再计算' },
+      { title: '设置', w: 54, action: 'statsOpenSettings:', tip: '打开 Qoder Meter 设置' },
+      { title: '更多操作', w: 84, action: 'statsMoreActions:', tip: '展开菜单栏图标的完整操作菜单' },
+      { title: '关闭', w: 54, action: 'closeStats:', tip: '关闭统计面板' }
+    ];
+    const gap = 6;
+    let totalW = 0;
+    for (let i = 0; i < actions.length; i++) totalW += actions[i].w;
+    totalW += (actions.length - 1) * gap;
+    const firstX = W - margin - totalW;
+    let x = firstX;
+    for (let i = 0; i < actions.length; i++) {
+      toolButton(cy, actions[i].title, x, actions[i].w, actions[i].action, actions[i].tip);
+      x += actions[i].w + gap;
+    }
+    statsFooterNote = sLabel(state.statsHint || '本机日志汇总 · 不联网 · 估算以 ≈ 标记',
+      [margin, top(cy + 6, 14), firstX - margin - 10, 14], 11, $.NSFontWeightRegular,
+      $.NSColor.secondaryLabelColor);
+    try { statsFooterNote.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+    root.addSubview(statsFooterNote);
+  };
+
+  if (overview) {
+    /* 总览：四张摘要卡 + 趋势柱状图 + 模型占比 + 自动摘要。 */
+    const cards = [
+      { label: '积分', value: fmtCredits(data.credits), color: T.gold,
+        tip: '当前范围的积分合计（本地日志）' },
+      { label: 'Token', value: (data.estimated ? '≈ ' : '') + fmtStatsTokens(data.tokens),
+        color: T.green, tip: '输出 Token；缺少精确值时按内容估算并标记 ≈' },
+      { label: '请求', value: fmtCount(data.requests), color: T.text,
+        tip: '带积分的助手请求数，按 request_id 去重' },
+      { label: '活跃天', value: String(data.activeDays), color: T.blue,
+        tip: '当前范围内有日志记录的自然日' }
+    ];
+    let cy = STATS_CONTENT_TOP;
+    const cardGap = 8;
+    const cardW = Math.floor((W - margin * 2 - cardGap * 3) / 4);
+    for (let i = 0; i < cards.length; i++) {
+      const x = margin + i * (cardW + cardGap);
+      root.addSubview(box([x, top(cy, STATS_CARD_H), cardW, STATS_CARD_H], T.grayTint, 10, 0, null));
+      const caption = sLabel(cards[i].label, [x + 10, top(cy + 8, 14), cardW - 20, 14], 11,
         $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
-      try { modelLabel.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
-      root.addSubview(modelLabel);
-      if (i < days.length - 1) {
-        root.addSubview(box([margin, y, W - margin * 2, 1], T.divider, 0, 0, null));
+      try { caption.setToolTip(cards[i].tip); } catch (e) {}
+      root.addSubview(caption);
+      const value = sLabel(cards[i].value, [x + 10, top(cy + 25, 22), cardW - 20, 22], 17,
+        $.NSFontWeightSemibold, cards[i].color);
+      try { value.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+      root.addSubview(value);
+    }
+    cy += STATS_CARD_H + STATS_SECTION_GAP;
+
+    sectionTitle(cy, trend.count ? '积分趋势 · 最近 ' + trend.count + ' ' + group.unit : '积分趋势',
+      (trend.basis === 'credits' ? '按积分 · 峰值 ' : '按 Token · 峰值 ') +
+      (trend.basis === 'credits' ? fmtCredits(trend.peak) : fmtStatsTokens(trend.peak)));
+    cy += STATS_SECTION_TITLE_H;
+
+    /* 柱状图完全由 NSBox 画：数值行、柱体、基线、时间轴标签。 */
+    const valueTop = cy;
+    const plotTop = cy + 15;
+    const plotH = 62;
+    const baseline = plotTop + plotH;
+    root.addSubview(box([margin, top(baseline, 1), W - margin * 2, 1], T.divider, 0, 0, null));
+    if (trend.bars.length) {
+      const slots = Math.max(trend.bars.length, 6);
+      const slot = (W - margin * 2) / slots;
+      const barW = Math.max(6, Math.min(30, Math.floor(slot - 8)));
+      for (let i = 0; i < trend.bars.length; i++) {
+        const bar = trend.bars[i];
+        const centerX = margin + slot * i + slot / 2;
+        const barX = Math.round(centerX - barW / 2);
+        const barH = bar.value > 0 ? Math.max(2, Math.round(bar.ratio * plotH)) : 1;
+        const barTip = bar.tip + '\n' + fmtCredits(bar.credits) + ' 积分 · ' +
+          (bar.estimated ? '≈ ' : '') + fmtStatsTokens(bar.tokens) + ' Token · ' +
+          bar.requests + ' 请求';
+        const barBox = box([barX, top(baseline - barH, barH), barW, barH],
+          i === trend.bars.length - 1 ? T.green : T.greenDim, 3, 0, null);
+        try { barBox.setToolTip(barTip); } catch (e) {}
+        root.addSubview(barBox);
+        root.addSubview(sLabel(bar.value > 0
+          ? (trend.basis === 'credits' ? fmtCredits(bar.value) : fmtStatsTokens(bar.value)) : '—',
+          [Math.round(centerX - slot / 2), top(valueTop, 13), Math.round(slot), 13], 9,
+          $.NSFontWeightRegular, T.soft, 1));
+        const axis = sLabel(bar.label, [Math.round(centerX - slot / 2), top(baseline + 5, 14),
+          Math.round(slot), 14], 9.5, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 1);
+        try { axis.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+        root.addSubview(axis);
+      }
+    } else {
+      root.addSubview(sLabel('暂无用量记录', [margin, top(plotTop + 22, 18), W - margin * 2, 18],
+        11, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 1));
+    }
+    cy += STATS_TREND_H + STATS_SECTION_GAP;
+
+    sectionTitle(cy, '模型构成 · ' + data.models.length + ' 个',
+      modelShares.basis === 'credits' ? '按积分占比' : '按 Token 占比');
+    cy += STATS_SECTION_TITLE_H;
+    if (modelShares.rows.length) {
+      const nameW = 132;
+      const pctW = 58;
+      const trackX = margin + nameW + 10;
+      const trackW = W - margin - pctW - 10 - trackX;
+      for (let i = 0; i < modelShares.rows.length; i++) {
+        const rowY = cy + i * STATS_MODEL_ROW_H;
+        const share = modelShares.rows[i];
+        const name = sLabel(share.name, [margin, top(rowY, 17), nameW, 17], 11,
+          $.NSFontWeightMedium, T.text);
+        try {
+          name.setLineBreakMode($.NSLineBreakByTruncatingTail);
+          name.setToolTip(share.name + '\n' + fmtCredits(share.credits) + ' 积分 · ' +
+            (share.estimated ? '≈ ' : '') + fmtStatsTokens(share.tokens) + ' Token');
+        } catch (e) {}
+        root.addSubview(name);
+        root.addSubview(box([trackX, top(rowY + 5, 7), trackW, 7], T.track, 3.5, 0, null));
+        const shareW = share.share > 0 ? Math.max(2, Math.round(trackW * share.share)) : 0;
+        if (shareW > 0) {
+          root.addSubview(box([trackX, top(rowY + 5, 7), shareW, 7],
+            i === 0 ? T.green : T.greenDim, 3.5, 0, null));
+        }
+        root.addSubview(sLabel(Math.round(share.share * 100) + '%',
+          [W - margin - pctW, top(rowY, 17), pctW, 17], 11, $.NSFontWeightRegular, T.soft, 2));
+      }
+    } else {
+      root.addSubview(sLabel('暂无模型记录', [margin, top(cy, 17), 300, 17], 11,
+        $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+    }
+    cy += Math.max(1, modelShares.rows.length) * STATS_MODEL_ROW_H + STATS_TIGHT_GAP;
+
+    sectionTitle(cy, '自动摘要 · 规则生成', '本地 JSONL · 不联网');
+    cy += STATS_SUMMARY_TITLE_H;
+    for (let i = 0; i < summaries.length; i++) {
+      const item = summaries[i];
+      const rowY = cy + i * STATS_SUMMARY_ROW_H;
+      root.addSubview(box([margin, top(rowY + 5, 5), 5, 5],
+        item.hasData ? T.green : T.gray, 2.5, 0, null));
+      const text = sLabel(item.text, [margin + 12, top(rowY, 15), W - margin * 2 - 12, 15], 11,
+        $.NSFontWeightRegular, item.hasData ? T.soft : $.NSColor.secondaryLabelColor);
+      try {
+        text.setLineBreakMode($.NSLineBreakByTruncatingTail);
+        text.setToolTip(item.text);
+      } catch (e) {}
+      root.addSubview(text);
+    }
+    cy += summaries.length * STATS_SUMMARY_ROW_H + STATS_TIGHT_GAP;
+    footerRow(cy);
+  } else {
+    /* 明细：逐期分页，每行带 mini bar 与主要模型。 */
+    let cy = STATS_CONTENT_TOP;
+    sectionTitle(cy, group.label + (direct ? ' · ' + statsDirectText(group.id) : ''),
+      periods.length ? '共 ' + periods.length + ' ' + group.unit : '暂无记录');
+    cy += STATS_SECTION_TITLE_H;
+    const rowsTop = cy;
+    let peak = 0;
+    for (let i = 0; i < periods.length; i++) {
+      if (periods[i].credits > peak) peak = periods[i].credits;
+    }
+    if (!rows.length) {
+      root.addSubview(sLabel('暂无用量记录', [margin, top(rowsTop + 12, 18), W - margin * 2, 18],
+        11, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor, 1));
+    } else {
+      for (let i = 0; i < rows.length; i++) {
+        const d = rows[i];
+        const rowTop = rowsTop + i * STATS_DETAIL_ROW_H;
+        root.addSubview(box([margin, top(rowTop + 3, 36), W - margin * 2, 36],
+          T.grayTint, 9, 0, null));
+        const dateLabel = sLabel(statsPeriodLabel(group.id, d.key),
+          [margin + 10, top(rowTop + 7, 15), periodLabelW, 15], 12, $.NSFontWeightMedium, T.text);
+        try {
+          dateLabel.setLineBreakMode($.NSLineBreakByTruncatingTail);
+          dateLabel.setToolTip(statsPeriodTip(group.id, d.key, d));
+        } catch (e) {}
+        root.addSubview(dateLabel);
+        const totalText = fmtCredits(d.credits) + ' 积分 · ' +
+          (d.estimated ? '≈ ' : '') + fmtStatsTokens(d.tokens) + ' tok · ' +
+          (group.id === 'day' ? d.requests + ' 请求' : d.activeDays + ' 天');
+        const totalX = margin + 10 + periodLabelW + 8;
+        const totalLabel = sLabel(totalText, [totalX, top(rowTop + 7, 15),
+          W - margin - 10 - totalX, 15], 11, $.NSFontWeightRegular, T.soft, 2);
+        try {
+          totalLabel.setLineBreakMode($.NSLineBreakByTruncatingTail);
+          totalLabel.setToolTip(totalText);
+        } catch (e) {}
+        root.addSubview(totalLabel);
+        const barX = margin + 10;
+        const barTrackW = 110;
+        root.addSubview(box([barX, top(rowTop + 24, 6), barTrackW, 6], T.track, 3, 0, null));
+        const barFillW = peak > 0 && d.credits > 0
+          ? Math.max(2, Math.round(barTrackW * (d.credits / peak))) : 0;
+        if (barFillW > 0) {
+          const mini = box([barX, top(rowTop + 24, 6), barFillW, 6], T.gold, 3, 0, null);
+          try { mini.setToolTip(totalText); } catch (e) {}
+          root.addSubview(mini);
+        }
+        const modelsLabel = sLabel(statsTopModelsText(d),
+          [barX + barTrackW + 10, top(rowTop + 21, 14),
+            W - margin - (barX + barTrackW + 10) - 6, 14],
+          10.5, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
+        try { modelsLabel.setLineBreakMode($.NSLineBreakByTruncatingTail); } catch (e) {}
+        root.addSubview(modelsLabel);
       }
     }
-  }
-
-  if (navVisible) {
-    statsNavButton(root, '‹ 上一页', margin, 8, 72, 'statsPrevPage:');
-    statsNavButton(root, '下一页 ›', W - margin - 72, 8, 72, 'statsNextPage:');
-    root.addSubview(sLabel('第 ' + (page + 1) + ' / ' + totalPages + ' 页',
-      [W / 2 - 60, 13, 120, 15], 11, $.NSFontWeightRegular,
-      $.NSColor.tertiaryLabelColor, 2));
+    cy += Math.max(1, rows.length) * STATS_DETAIL_ROW_H;
+    if (navVisible) {
+      const navY = top(cy + (STATS_NAV_H - 26) / 2, 26);
+      statsNavButton(root, '‹ 上一页', margin, navY, 72, 'statsPrevPage:');
+      statsNavButton(root, '下一页 ›', W - margin - 72, navY, 72, 'statsNextPage:');
+      root.addSubview(sLabel('第 ' + (paging.page + 1) + ' / ' + paging.pageCount + ' 页',
+        [W / 2 - 60, top(cy + 7, 15), 120, 15], 11, $.NSFontWeightRegular,
+        $.NSColor.tertiaryLabelColor, 2));
+      cy += STATS_NAV_H;
+    }
+    cy += 4;
+    footerRow(cy);
   }
 
   statsPanel.orderOut(null);
@@ -3244,6 +3865,7 @@ function openStats(preview) {
     if (settingsPanel) settingsPanel.orderOut(null);
     state.statsHidden = false;
     state.statsSuppress = false;
+    state.statsHint = '';
     state.statsPinned = true;
     state.statsPreview = preview !== false;
     state.statsPreviewAt = state.statsPreview ? Date.now() : 0;
@@ -3318,6 +3940,84 @@ function setStatsRange(id) {
   saveSettings();
   rebuildStatsWindow();
   buildMenu();
+}
+
+function setStatsGroup(id) {
+  let valid = false;
+  for (let i = 0; i < STATS_GROUPS.length; i++) {
+    if (STATS_GROUPS[i].id === id) valid = true;
+  }
+  if (!valid) return;
+  state.statsGroup = id;
+  state.statsSuppress = false;
+  state.statsPage = 0;
+  saveSettings();
+  rebuildStatsWindow();
+  buildMenu();
+}
+
+function setStatsView(id) {
+  let valid = false;
+  for (let i = 0; i < STATS_VIEWS.length; i++) {
+    if (STATS_VIEWS[i].id === id) valid = true;
+  }
+  if (!valid) return;
+  state.statsView = id;
+  state.statsSuppress = false;
+  state.statsPage = 0;
+  saveSettings();
+  rebuildStatsWindow();
+  buildMenu();
+}
+
+/* 面板底部按钮：状态条图标没有右键，这里给出可点的全部出口。 */
+function setStatsFooterNote(text) {
+  if (!statsFooterNote) return;
+  try { setText(statsFooterNote, text); } catch (e) {}
+}
+
+function showMoreActions() {
+  let popped = false;
+  state.statsHint = '';
+  try {
+    if (statusItem && statusItem.button &&
+        typeof statusItem.button.performClick === 'function') {
+      statusItem.button.performClick(null);
+      popped = true;
+    }
+  } catch (e) {
+    logError('showMoreActions.performClick', e);
+  }
+  if (!popped) {
+    try {
+      const menu = statusItem ? statusItem.menu : null;
+      if (menu && typeof menu.popUpMenuPositioningItemAtLocationInView === 'function') {
+        const button = statusItem.button;
+        const frame = button ? button.frame : null;
+        const point = frame
+          ? $.NSMakePoint(Number(frame.origin.x), Number(frame.origin.y) + Number(frame.size.height))
+          : $.NSMakePoint(0, 0);
+        menu.popUpMenuPositioningItemAtLocationInView(null, point, frame ? button.superview : null);
+        popped = true;
+      }
+    } catch (e) {
+      logError('showMoreActions.popUpMenu', e);
+    }
+  }
+  if (!popped) {
+    state.statsHint = '未能展开菜单，请点菜单栏的 Qoder Meter 图标';
+    setStatsFooterNote(state.statsHint);
+  }
+  return popped;
+}
+
+function openSettingsFromStats() {
+  try {
+    closeStats();
+    showSettings();
+  } catch (e) {
+    logError('openSettingsFromStats', e);
+  }
 }
 
 function rebuildPanelUI() {
@@ -3674,15 +4374,45 @@ ObjC.registerSubclass({
         setStatsMode((STATS_MODES[idx] || STATS_MODES[0]).id);
       }
     },
+    'statsGroupPick:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const idx = Number(sender.tag);
+        setStatsGroup((STATS_GROUPS[idx] || STATS_GROUPS[0]).id);
+      }
+    },
+    'statsViewPick:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        const idx = Number(sender.tag);
+        setStatsView((STATS_VIEWS[idx] || STATS_VIEWS[0]).id);
+      }
+    },
+    'statsViewMenu:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setStatsView(representedId(sender)); }
+    },
+    'statsMoreActions:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { showMoreActions(); }
+    },
+    'statsOpenSettings:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { openSettingsFromStats(); }
+    },
     'statsModeMenu:': {
       types: ['void', ['id']],
       implementation: function (sender) { setStatsMode(representedId(sender)); }
+    },
+    'statsGroupMenu:': {
+      types: ['void', ['id']],
+      implementation: function (sender) { setStatsGroup(representedId(sender)); }
     },
     'statsPrevPage:': {
       types: ['void', ['id']],
       implementation: function (sender) {
         const data = state.statsData || statsForRange(state.statsRange);
-        const total = Math.max(1, Math.ceil(data.days.length / STATS_PAGE_SIZE));
+        const total = statsPageCount(statsPeriods(data, state.statsGroup).length, STATS_PAGE_SIZE);
         state.statsPage = Math.max(0, Math.min(state.statsPage, total - 1) - 1);
         rebuildStatsWindow();
       }
@@ -3691,7 +4421,7 @@ ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function (sender) {
         const data = state.statsData || statsForRange(state.statsRange);
-        const total = Math.max(1, Math.ceil(data.days.length / STATS_PAGE_SIZE));
+        const total = statsPageCount(statsPeriods(data, state.statsGroup).length, STATS_PAGE_SIZE);
         state.statsPage = Math.min(total - 1, state.statsPage + 1);
         rebuildStatsWindow();
       }
@@ -3701,6 +4431,7 @@ ObjC.registerSubclass({
       implementation: function (sender) {
         collectDailyUsage(true);
         state.statsData = null;
+        state.statsHint = '';
         rebuildStatsWindow();
       }
     },

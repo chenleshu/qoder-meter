@@ -37,6 +37,222 @@ function New-QmText([string]$text,[double]$size,[string]$colorHex,[string]$weigh
  $t.VerticalAlignment='Center';$t.TextTrimming='CharacterEllipsis';return $t
 }
 function New-QmPanel([bool]$horizontal){$p=[Windows.Controls.StackPanel]::new();if($horizontal){$p.Orientation='Horizontal'};return $p}
+# Shared controls for the settings and claim-history windows. The templates use
+# window-scoped brushes so every skin re-themes both surfaces without custom code.
+function Get-QmThemeResources([string]$skin){
+ $t=$script:QM_SKINS[$skin]
+ $res=[Windows.ResourceDictionary]::new()
+ $map=[ordered]@{
+  QmText=$t.text;QmSoft=$t.soft;QmFaint=$t.faint;QmGray=$t.gray
+  QmAccent=$t.green;QmGold=$t.gold;QmBlue=$t.blue;QmRed=$t.red
+  QmSurface=$t.track;QmDivider=$t.divider;QmHover=$t.grayTint
+  QmAccentTint=$t.greenTint;QmGoldTint=$t.goldTint;QmGrayTint=$t.grayTint;QmBlueTint=$t.blueTint
+ }
+ foreach($key in $map.Keys){$res[$key]=Get-QmBrush $map[$key]}
+ $res['QmOnAccent']=Get-QmBrush $(if($skin -in @('graphite','dusk')){'#FF11151B'}else{'#FFFFFFFF'})
+ # Popups cannot rely on the translucent window surface; keep the same RGB but opaque.
+ $bg=[Windows.Media.ColorConverter]::ConvertFromString($t.bg)
+ $opaque=[Windows.Media.SolidColorBrush]::new([Windows.Media.Color]::FromArgb(255,$bg.R,$bg.G,$bg.B));$opaque.Freeze()
+ $res['QmMenuBg']=$opaque
+ $styles=[Windows.Markup.XamlReader]::Parse(@'
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <Style x:Key="QmGhostButton" TargetType="{x:Type Button}">
+  <Setter Property="Foreground" Value="{DynamicResource QmSoft}"/>
+  <Setter Property="Background" Value="{DynamicResource QmMenuBg}"/>
+  <Setter Property="BorderBrush" Value="{DynamicResource QmDivider}"/>
+  <Setter Property="BorderThickness" Value="1"/>
+  <Setter Property="Padding" Value="12,6"/>
+  <Setter Property="MinHeight" Value="32"/>
+  <Setter Property="FontSize" Value="12"/>
+  <Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="HorizontalContentAlignment" Value="Center"/>
+  <Setter Property="VerticalContentAlignment" Value="Center"/>
+  <Setter Property="SnapsToDevicePixels" Value="True"/>
+  <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  <Setter Property="Template">
+   <Setter.Value>
+    <ControlTemplate TargetType="{x:Type Button}">
+     <Grid x:Name="Root">
+      <Border x:Name="Shell" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+       <Grid>
+        <Border x:Name="Hover" Background="{DynamicResource QmHover}" CornerRadius="6" Opacity="0" IsHitTestVisible="False"/>
+        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True"/>
+       </Grid>
+      </Border>
+      <Border x:Name="Focus" BorderBrush="{DynamicResource QmAccent}" BorderThickness="1.5" CornerRadius="9" Margin="-2" Opacity="0" IsHitTestVisible="False"/>
+     </Grid>
+     <ControlTemplate.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Hover" Property="Opacity" Value="1"/></Trigger>
+      <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Focus" Property="Opacity" Value="1"/></Trigger>
+      <Trigger Property="IsPressed" Value="True"><Setter TargetName="Root" Property="Opacity" Value="0.78"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Root" Property="Opacity" Value="0.45"/></Trigger>
+     </ControlTemplate.Triggers>
+    </ControlTemplate>
+   </Setter.Value>
+  </Setter>
+ </Style>
+ <Style x:Key="QmPrimaryButton" TargetType="{x:Type Button}" BasedOn="{StaticResource QmGhostButton}">
+  <Setter Property="Foreground" Value="{DynamicResource QmOnAccent}"/>
+  <Setter Property="Background" Value="{DynamicResource QmAccent}"/>
+  <Setter Property="BorderBrush" Value="{DynamicResource QmAccent}"/>
+  <Setter Property="FontWeight" Value="SemiBold"/>
+  <Setter Property="Padding" Value="15,7"/>
+  <Setter Property="MinHeight" Value="33"/>
+ </Style>
+ <Style x:Key="QmCheck" TargetType="{x:Type CheckBox}">
+  <Setter Property="Foreground" Value="{DynamicResource QmText}"/>
+  <Setter Property="Background" Value="Transparent"/>
+  <Setter Property="BorderBrush" Value="Transparent"/>
+  <Setter Property="BorderThickness" Value="1"/>
+  <Setter Property="Padding" Value="8,5"/>
+  <Setter Property="FontSize" Value="11.5"/>
+  <Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="SnapsToDevicePixels" Value="True"/>
+  <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  <Setter Property="Template">
+   <Setter.Value>
+    <ControlTemplate TargetType="{x:Type CheckBox}">
+     <Border x:Name="Shell" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+      <Grid>
+       <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+       <Border x:Name="Box" Width="16" Height="16" CornerRadius="5" BorderThickness="1.5" BorderBrush="{DynamicResource QmFaint}" Background="Transparent" VerticalAlignment="Center" Margin="0,0,8,0">
+        <TextBlock x:Name="Mark" Text="&#xE73E;" FontFamily="Segoe MDL2 Assets" FontSize="9" Foreground="{DynamicResource QmOnAccent}" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
+       </Border>
+       <ContentPresenter Grid.Column="1" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+      </Grid>
+     </Border>
+     <ControlTemplate.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Shell" Property="Background" Value="{DynamicResource QmHover}"/></Trigger>
+      <Trigger Property="IsChecked" Value="True">
+       <Setter TargetName="Box" Property="Background" Value="{DynamicResource QmAccent}"/>
+       <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource QmAccent}"/>
+       <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+       <Setter TargetName="Shell" Property="Background" Value="{DynamicResource QmAccentTint}"/>
+       <Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource QmAccentTint}"/>
+      </Trigger>
+      <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource QmAccent}"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+     </ControlTemplate.Triggers>
+    </ControlTemplate>
+   </Setter.Value>
+  </Setter>
+ </Style>
+ <Style x:Key="QmChip" TargetType="{x:Type CheckBox}" BasedOn="{StaticResource QmCheck}">
+  <Setter Property="Background" Value="{DynamicResource QmMenuBg}"/>
+  <Setter Property="BorderBrush" Value="{DynamicResource QmDivider}"/>
+  <Setter Property="Padding" Value="9,6"/>
+ </Style>
+ <Style x:Key="QmComboItem" TargetType="{x:Type ComboBoxItem}">
+  <Setter Property="Foreground" Value="{DynamicResource QmText}"/>
+  <Setter Property="Padding" Value="10,7"/>
+  <Setter Property="FontSize" Value="12"/>
+  <Setter Property="HorizontalContentAlignment" Value="Left"/>
+  <Setter Property="SnapsToDevicePixels" Value="True"/>
+  <Setter Property="Template">
+   <Setter.Value>
+    <ControlTemplate TargetType="{x:Type ComboBoxItem}">
+     <Border x:Name="Shell" Margin="2,1" Padding="{TemplateBinding Padding}" CornerRadius="6" Background="Transparent">
+      <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+     </Border>
+     <ControlTemplate.Triggers>
+      <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Shell" Property="Background" Value="{DynamicResource QmHover}"/></Trigger>
+      <Trigger Property="IsSelected" Value="True">
+       <Setter TargetName="Shell" Property="Background" Value="{DynamicResource QmAccentTint}"/>
+       <Setter Property="Foreground" Value="{DynamicResource QmAccent}"/>
+      </Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+     </ControlTemplate.Triggers>
+    </ControlTemplate>
+   </Setter.Value>
+  </Setter>
+ </Style>
+ <Style TargetType="{x:Type ScrollBar}">
+  <Setter Property="Width" Value="7"/>
+  <Setter Property="MinWidth" Value="7"/>
+  <Setter Property="Background" Value="Transparent"/>
+  <Setter Property="Template">
+   <Setter.Value>
+    <ControlTemplate TargetType="{x:Type ScrollBar}">
+     <Grid Background="Transparent">
+      <Track x:Name="PART_Track" IsDirectionReversed="True">
+       <Track.DecreaseRepeatButton><RepeatButton Command="{x:Static ScrollBar.PageUpCommand}" Focusable="False" Opacity="0"/></Track.DecreaseRepeatButton>
+       <Track.Thumb>
+        <Thumb x:Name="DragThumb" Opacity="0.55">
+         <Thumb.Template><ControlTemplate TargetType="{x:Type Thumb}"><Border Background="{DynamicResource QmFaint}" CornerRadius="3" Margin="1,0,1,0"/></ControlTemplate></Thumb.Template>
+        </Thumb>
+       </Track.Thumb>
+       <Track.IncreaseRepeatButton><RepeatButton Command="{x:Static ScrollBar.PageDownCommand}" Focusable="False" Opacity="0"/></Track.IncreaseRepeatButton>
+      </Track>
+     </Grid>
+     <ControlTemplate.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="DragThumb" Property="Opacity" Value="0.9"/></Trigger>
+     </ControlTemplate.Triggers>
+    </ControlTemplate>
+   </Setter.Value>
+  </Setter>
+ </Style>
+ <Style x:Key="QmCombo" TargetType="{x:Type ComboBox}">
+  <Setter Property="Foreground" Value="{DynamicResource QmText}"/>
+  <Setter Property="Background" Value="{DynamicResource QmMenuBg}"/>
+  <Setter Property="BorderBrush" Value="{DynamicResource QmDivider}"/>
+  <Setter Property="FontSize" Value="12"/>
+  <Setter Property="MinHeight" Value="34"/>
+  <Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="SnapsToDevicePixels" Value="True"/>
+  <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+  <Setter Property="ItemContainerStyle" Value="{StaticResource QmComboItem}"/>
+  <Setter Property="Template">
+   <Setter.Value>
+    <ControlTemplate TargetType="{x:Type ComboBox}">
+     <Grid>
+      <Border x:Name="Shell" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="8" Padding="10,0">
+       <Grid>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock x:Name="Placeholder" Text="跟随当前会话" Foreground="{DynamicResource QmFaint}" VerticalAlignment="Center" Margin="0,0,8,0" IsHitTestVisible="False" Visibility="Collapsed"/>
+        <ContentPresenter Margin="0,0,8,0" VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
+        <TextBlock Grid.Column="1" Text="&#xE70D;" FontFamily="Segoe MDL2 Assets" FontSize="9" Foreground="{DynamicResource QmFaint}" VerticalAlignment="Center"/>
+       </Grid>
+      </Border>
+      <ToggleButton Focusable="False" ClickMode="Press" Background="Transparent" IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+       <ToggleButton.Template><ControlTemplate TargetType="{x:Type ToggleButton}"><Border Background="Transparent"/></ControlTemplate></ToggleButton.Template>
+      </ToggleButton>
+      <Popup x:Name="PART_Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" Focusable="False" AllowsTransparency="True" PopupAnimation="Fade">
+       <Border Margin="0,4,0,0" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" Background="{DynamicResource QmMenuBg}" BorderBrush="{DynamicResource QmDivider}" BorderThickness="1" CornerRadius="10" Padding="4">
+        <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+         <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+        </ScrollViewer>
+       </Border>
+      </Popup>
+     </Grid>
+     <ControlTemplate.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource QmFaint}"/></Trigger>
+      <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource QmAccent}"/></Trigger>
+      <Trigger Property="IsDropDownOpen" Value="True"><Setter TargetName="Shell" Property="BorderBrush" Value="{DynamicResource QmAccent}"/></Trigger>
+      <Trigger Property="SelectedIndex" Value="-1"><Setter TargetName="Placeholder" Property="Visibility" Value="Visible"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+     </ControlTemplate.Triggers>
+    </ControlTemplate>
+   </Setter.Value>
+  </Setter>
+ </Style>
+</ResourceDictionary>
+'@)
+ foreach($key in $styles.Keys){$res[$key]=$styles[$key]}
+ return $res
+}
+function Initialize-QmThemedWindow($window,[string]$skin){
+ $t=$script:QM_SKINS[$skin]
+ $window.Background=Get-QmBrush $t.bg;$window.Foreground=Get-QmBrush $t.text
+ $window.Resources[[Windows.SystemColors]::WindowBrushKey]=Get-QmBrush $t.bg
+ $window.Resources[[Windows.SystemColors]::WindowTextBrushKey]=Get-QmBrush $t.text
+ $window.Resources['QmResolvedSkin']=$skin
+ [void]$window.Resources.MergedDictionaries.Add((Get-QmThemeResources $skin))
+}
+function New-QmThemedButton([string]$text,[string]$skin,[bool]$primary=$false){
+ $b=[Windows.Controls.Button]::new();$b.Content=$text;$b.FontSize=12;$b.SnapsToDevicePixels=$true
+ $b.SetResourceReference([Windows.FrameworkElement]::StyleProperty,$(if($primary){'QmPrimaryButton'}else{'QmGhostButton'}))
+ return $b
+}
 function New-QmWindow {
  $w=[Windows.Window]::new();$w.WindowStyle='None';$w.AllowsTransparency=$true;$w.Background=[Windows.Media.Brushes]::Transparent
  $w.ResizeMode='NoResize';$w.ShowInTaskbar=$false;$w.ShowActivated=$false;$w.Topmost=$true;$w.SizeToContent='WidthAndHeight'
@@ -46,8 +262,25 @@ function Get-QmHwnd($window){return [Windows.Interop.WindowInteropHelper]::new($
 function Set-QmNoActivate($window){$h=Get-QmHwnd $window;if($h -ne [IntPtr]::Zero){$ex=[QoderMeter.Native]::GetWindowLongW($h,-20);[void][QoderMeter.Native]::SetWindowLongW($h,-20,($ex -bor 0x08000080))}}
 function New-QmBorder($skin,[double]$radius){$t=$script:QM_SKINS[$skin];$b=[Windows.Controls.Border]::new();$b.Background=Get-QmBrush $t.bg;$b.BorderBrush=Get-QmBrush $t.border;$b.BorderThickness=[Windows.Thickness]::new(1);$b.CornerRadius=[Windows.CornerRadius]::new($radius);return $b}
 function Reset-QmViewRefs {
- $script:UI_SEGS=@{};$script:UI_GROUPS=@{};$script:UI_TPS=$null;$script:UI_TITLE=$null;$script:UI_STATUS=$null;$script:UI_SUB=$null;$script:UI_FOOT=$null;$script:UI_CREDIT=$null;$script:UI_CREDIT_DOT=$null;$script:UI_SPARK=$null;$script:UI_DOT=$null;$script:UI_STATE_PILL=$null;$script:UI_BAR=$null;$script:UI_GEAR=$null;$script:UI_HALO=$null;$script:UI_SPARK_RECTS=@();$script:UI_TIP=$null
+ $script:UI_SEGS=@{};$script:UI_GROUPS=@{};$script:UI_TPS=$null;$script:UI_TITLE=$null;$script:UI_STATUS=$null;$script:UI_SUB=$null;$script:UI_FOOT=$null;$script:UI_CREDIT=$null;$script:UI_CREDIT_DOT=$null;$script:UI_SPARK=$null;$script:UI_DOT=$null;$script:UI_STATE_PILL=$null;$script:UI_BAR=$null;$script:UI_GEAR=$null;$script:UI_STATS=$null;$script:UI_HALO=$null;$script:UI_SPARK_RECTS=@();$script:UI_TIP=$null
  $script:UI_BAR_PILLS=@{};$script:UI_BAR_TPS=$null;$script:UI_BAR_METRICS_SIG=''
+}
+$script:UI_STATS_GAP=2.0
+function New-QmStatsBadge($skin,[double]$size){
+ # Chart entry beside the gear: the same MDL2 glyph the tray menu uses, sitting on a
+ # small rounded plate so it reads as a picture of the dashboard rather than plain text.
+ $t=$script:QM_SKINS[$skin]
+ $b=[Windows.Controls.Button]::new()
+ $b.Width=$size;$b.Height=$size;$b.MinWidth=0;$b.MinHeight=0;$b.Padding=[Windows.Thickness]::new(0);$b.BorderThickness=[Windows.Thickness]::new(0)
+ $b.Background=[Windows.Media.Brushes]::Transparent;$b.Cursor='Hand';$b.ToolTip='查看用量统计';$b.Tag='QmStatsEntry'
+ $b.Margin=[Windows.Thickness]::new(0,0,$script:UI_STATS_GAP,0)
+ $plate=[Windows.Controls.Border]::new();$plate.Width=15;$plate.Height=15;$plate.CornerRadius=[Windows.CornerRadius]::new(5)
+ $plate.Background=Get-QmBrush $t.greenTint;$plate.HorizontalAlignment='Center';$plate.VerticalAlignment='Center'
+ $glyph=New-QmText ([string][char]0xE9D9) 10 $t.green 'SemiBold';$glyph.FontFamily=[Windows.Media.FontFamily]::new('Segoe MDL2 Assets')
+ $glyph.HorizontalAlignment='Center';$glyph.VerticalAlignment='Center';$glyph.TextTrimming='None';$plate.Child=$glyph;$b.Content=$plate
+ [Windows.Automation.AutomationProperties]::SetName($b,'查看用量统计')
+ $b.Add_Click({param($sender,$eventArgs) $eventArgs.Handled=$true;Invoke-QmCommand 'stats' $null})
+ $script:UI_STATS=$b;return $b
 }
 function New-QmGear($skin,[double]$size){
  $b=[Windows.Controls.Button]::new();$b.Content=[string][char]0xE713;$b.FontFamily=[Windows.Media.FontFamily]::new('Segoe MDL2 Assets');$b.FontSize=12
@@ -139,24 +372,21 @@ function New-QmTipHost($card){
 function New-QmBarField($skin,[double]$sc){
  # The leading status dot is always present. Keep each divider inside its following
  # field so adaptive hiding removes both, without leaving leading/trailing rules.
- $p=New-QmPanel $true;$p.Tag='QmBarField';$p.Margin=[Windows.Thickness]::new(0,0,2.5*$sc,0)
+ $p=New-QmPanel $true;$p.Tag='QmBarField';$p.Margin=[Windows.Thickness]::new(0,0,2*$sc,0)
  $line=[Windows.Controls.Border]::new();$line.Tag='QmBarSeparator';$line.Width=1;$line.Height=12*$sc
  $line.Background=Get-QmBrush $script:QM_SKINS[$skin].gray;$line.Opacity=.35;$line.VerticalAlignment='Center'
- $line.Margin=[Windows.Thickness]::new(0,0,3*$sc,0);$line.IsHitTestVisible=$false;$line.SnapsToDevicePixels=$true
+ $line.Margin=[Windows.Thickness]::new(0,0,2*$sc,0);$line.IsHitTestVisible=$false;$line.SnapsToDevicePixels=$true
  [void]$p.Children.Add($line);return $p
 }
-function Set-QmBarTextSlot($text,[string]$sample,[double]$minimum=0){
- # Measure a representative capacity only while building, never the live value.
- # Fixed TextBlock widths retain ellipsis while numbers/status/title change.
- $original=$text.Text;$text.Text=$sample
- $text.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
- $width=[math]::Max($minimum,[math]::Ceiling($text.DesiredSize.Width))
- $text.Text=$original;$text.Width=$width
+function Set-QmBarTextFit($text){
+ # Values size to their own content; there is no shared column capacity, so
+ # short numbers do not leave reserved gaps. The bar width follows the sum.
+ $text.Width=[double]::NaN
 }
 function Build-QmBar($cfg,$skin,[double]$sc){
  Reset-QmViewRefs;$t=$script:QM_SKINS[$skin]
  $border=New-QmBorder $skin 10;$border.Height=26*$sc;$border.Width=680;$border.ClipToBounds=$true
- $grid=[Windows.Controls.Grid]::new();$grid.Margin=[Windows.Thickness]::new(6,0,3,0)
+ $grid=[Windows.Controls.Grid]::new();$grid.Margin=[Windows.Thickness]::new(5,0,2,0)
  foreach($width in @('Auto','*','Auto')){$cd=[Windows.Controls.ColumnDefinition]::new();$cd.Width=[Windows.GridLengthConverter]::new().ConvertFromString($width);[void]$grid.ColumnDefinitions.Add($cd)}
  $left=New-QmPanel $true;$middle=New-QmPanel $true;$right=New-QmPanel $true
  [Windows.Controls.Grid]::SetColumn($middle,1);[Windows.Controls.Grid]::SetColumn($right,2)
@@ -165,9 +395,9 @@ function Build-QmBar($cfg,$skin,[double]$sc){
  $dot=[Windows.Shapes.Ellipse]::new();$dot.Width=6;$dot.Height=6;$dot.Fill=Get-QmBrush $t.gray;$halo.Child=$dot;[void]$left.Children.Add($halo);$script:UI_DOT=$dot;$script:UI_HALO=$halo
  if($cfg.display.tps){
   $tps=New-QmPanel $true;[void]$left.Children.Add($tps);$script:UI_BAR_TPS=$tps
-  $lab=New-QmText 'TPS' (9.5*$sc) $t.faint;$lab.Margin=[Windows.Thickness]::new(0,0,3,0);[void]$tps.Children.Add($lab)
-  $v=New-QmText '—' (18*$sc) $t.green 'SemiBold' $true;Set-QmBarTextSlot $v '9999' (44*$sc)
-  $v.Margin=[Windows.Thickness]::new(0,0,4,0);[void]$tps.Children.Add($v);$script:UI_TPS=$v
+  $lab=New-QmText 'TPS' (9.5*$sc) $t.faint;$lab.Margin=[Windows.Thickness]::new(0,0,2,0);[void]$tps.Children.Add($lab)
+  $v=New-QmText '—' (18*$sc) $t.green 'SemiBold' $true;Set-QmBarTextFit $v
+  $v.Margin=[Windows.Thickness]::new(0,0,2,0);[void]$tps.Children.Add($v);$script:UI_TPS=$v
  }
  $defs=@(@('title','',''),@('turn','本轮 ','9h 59m'),@('age','总计 ','99h 59m'),@('token','Token ','≈999.9k'),@('credits','消耗 ','9999.99'),@('requests','请求 ','999.9k'),@('tools','工具 ','999.9k'),@('latency','延迟 ','9m 59s'))
  foreach($def in $defs){
@@ -177,7 +407,7 @@ function Build-QmBar($cfg,$skin,[double]$sc){
   $vc=switch($key){'token'{$t.blue};'credits'{$t.gold};'latency'{$t.faint};default{$t.text}}
   $weight=if($key -in @('token','credits')){'SemiBold'}else{'Medium'}
   $v=New-QmText '—' (12*$sc) $vc $weight ($key -ne 'title')
-  if($key -eq 'title'){$v.Width=110*$sc}else{Set-QmBarTextSlot $v $def[2]}
+  if($key -eq 'title'){$v.MaxWidth=96*$sc}else{Set-QmBarTextFit $v}
   [void]$p.Children.Add($v);[void]$middle.Children.Add($p)
   $p.Measure([Windows.Size]::new([double]::PositiveInfinity,[double]::PositiveInfinity))
   $script:UI_GROUPS[$key]=[pscustomobject]@{Element=$p;Need=[double]$p.DesiredSize.Width}
@@ -185,16 +415,17 @@ function Build-QmBar($cfg,$skin,[double]$sc){
  }
  if($cfg.display.status){
   $p=New-QmBarField $skin $sc;$pill=New-QmPill '等待会话' $skin 0 (19*$sc);$pill.Margin=[Windows.Thickness]::new(0)
-  Set-QmBarTextSlot $pill.Child '等待会话';$pill.Width=$pill.Child.Width+16
+  Set-QmBarTextFit $pill.Child
   [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_STATUS=$pill.Child;$script:UI_STATE_PILL=$pill;$script:UI_BAR_PILLS.status=$p
  }
  if($cfg.display.credit){
   $p=New-QmBarField $skin $sc;$pill=New-QmPill '账户读取中' $skin 0 (19*$sc);$pill.Margin=[Windows.Thickness]::new(0)
-  Set-QmBarTextSlot $pill.Child '余 999,999 · 今 +99,999';$pill.Width=$pill.Child.Width+16
+  Set-QmBarTextFit $pill.Child
   [void]$p.Children.Add($pill);[void]$right.Children.Add($p);$script:UI_CREDIT=$pill.Child;$script:UI_BAR_PILLS.credit=$p
  }
+ [void]$right.Children.Add((New-QmStatsBadge $skin (20*$sc)))
  [void]$right.Children.Add((New-QmGear $skin (20*$sc)))
- $border.Child=$grid;$script:UI_BAR=$border;$script:UI_BAR_LEFT=$left;$script:UI_BAR_RIGHT=$right;$script:UI_BAR_SCALE=$sc;$script:UI_BAR_PAD=11
+ $border.Child=$grid;$script:UI_BAR=$border;$script:UI_BAR_LEFT=$left;$script:UI_BAR_RIGHT=$right;$script:UI_BAR_SCALE=$sc;$script:UI_BAR_PAD=10
  Set-QmBarWidth 680
  return $border
 }
@@ -218,13 +449,14 @@ function Get-QmPreferredBarWidth {
  # cache pre-host measurements. Restore the fit without changing visible fields.
  if(!$script:UI_BAR){return 0}
  Sync-QmBarMeasurementContext
- $states=@();$gearWidth=$script:UI_GEAR.Width
- $elements=@($script:UI_HALO,$script:UI_BAR_TPS)+@($script:UI_BAR_PILLS.Values)+@($script:UI_GROUPS.Values|ForEach-Object{$_.Element})
+ $states=@();$gearWidth=$script:UI_GEAR.Width;$statsWidth=$(if($script:UI_STATS){$script:UI_STATS.Width}else{$null})
+ $elements=@($script:UI_HALO,$script:UI_BAR_TPS,$script:UI_STATS)+@($script:UI_BAR_PILLS.Values)+@($script:UI_GROUPS.Values|ForEach-Object{$_.Element})
  try{
   $script:UI_GEAR.Width=20*$script:UI_BAR_SCALE
+  if($script:UI_STATS){$script:UI_STATS.Width=20*$script:UI_BAR_SCALE}
   foreach($el in $elements){if($el){$states+=@{Element=$el;Visibility=$el.Visibility};$el.Visibility='Visible'}}
   return Get-QmContentBarWidth
- }finally{$script:UI_GEAR.Width=$gearWidth;foreach($state in $states){$state.Element.Visibility=$state.Visibility}}
+ }finally{$script:UI_GEAR.Width=$gearWidth;if($statsWidth -ne $null){$script:UI_STATS.Width=$statsWidth};foreach($state in $states){$state.Element.Visibility=$state.Visibility}}
 }
 function Get-QmContentBarWidth {
  if(!$script:UI_BAR){return 0}
@@ -245,8 +477,23 @@ function Get-QmBarFixedWidth {
 function Set-QmBarWidth([double]$available){
  if(!$script:UI_BAR){return}
  Sync-QmBarMeasurementContext
- $available=[math]::Max(0,$available)
- $script:UI_GEAR.Width=[math]::Min(20*$script:UI_BAR_SCALE,[math]::Max(0,$available-$script:UI_BAR_PAD))
+ # Content-sized values change every tick. Invalidate the whole bar before
+ # measuring so a detached or freshly attached tree never reuses stale widths.
+ $pending=[Collections.Generic.Stack[Windows.DependencyObject]]::new();$pending.Push($script:UI_BAR)
+ while($pending.Count){
+  $el=$pending.Pop()
+  if($el -is [Windows.UIElement]){$el.InvalidateMeasure()}
+  for($i=0;$i -lt [Windows.Media.VisualTreeHelper]::GetChildrenCount($el);$i++){$pending.Push([Windows.Media.VisualTreeHelper]::GetChild($el,$i))}
+ }
+ # Use a double literal: [math]::Max(0, 284.6) binds the int overload and rounds up.
+ $available=[math]::Max(0.0,[double]$available)
+ $script:UI_GEAR.Width=[math]::Min(20.0*$script:UI_BAR_SCALE,[math]::Max(0.0,$available-$script:UI_BAR_PAD))
+ # The chart entry shares the gear's cap and keeps its own room only after the gear
+ # has been sized, so the settings control is always the last endpoint standing.
+ if($script:UI_STATS){
+  $script:UI_STATS.Visibility='Visible'
+  $script:UI_STATS.Width=[math]::Min(20.0*$script:UI_BAR_SCALE,[math]::Max(0.0,$available-$script:UI_BAR_PAD-$script:UI_GEAR.Width-$script:UI_STATS_GAP))
+ }
  foreach($pill in $script:UI_BAR_PILLS.Values){$pill.Visibility='Visible'}
  if($script:UI_BAR_TPS){$script:UI_BAR_TPS.Visibility='Visible'}
  $script:UI_HALO.Visibility='Visible'
@@ -268,6 +515,11 @@ function Set-QmBarWidth([double]$available){
  if($script:UI_BAR_PILLS.credit -and $fixed -gt $available){
   $script:UI_BAR_PILLS.credit.Visibility='Collapsed';$fixed=Get-QmBarFixedWidth
  }
+ # The chart entry duplicates the tray menu's statistics item, so it is the first
+ # endpoint to give way; the gear below it never collapses.
+ if($script:UI_STATS -and $fixed -gt $available){
+  $script:UI_STATS.Visibility='Collapsed';$fixed=Get-QmBarFixedWidth
+ }
  # At very narrow widths retain settings instead of allowing fixed endpoints to overlap.
  if($script:UI_BAR_TPS -and $fixed -gt $available){
   $script:UI_BAR_TPS.Visibility='Collapsed';$fixed=Get-QmBarFixedWidth
@@ -281,7 +533,10 @@ function Set-QmBarWidth([double]$available){
   if($w -le ($budget-$used+0.01)){$script:UI_GROUPS[$key].Element.Visibility='Visible';$used+=$w}
   else{$script:UI_GROUPS[$key].Element.Visibility='Collapsed'}
  }
- $width=[math]::Min($available,[math]::Max(40,[math]::Ceiling($fixed+$used)))
+ # Layout rounding can round a fractional DIP width up past the host region;
+ # cap at whole DIPs so content-sized widths never cover neighboring controls.
+ $cap=[math]::Max(0.0,[math]::Floor($available))
+ $width=[math]::Min($cap,[math]::Max(40.0,[math]::Ceiling($fixed+$used)))
  if($script:UI_BAR.Width -ne $width){$script:UI_BAR.Width=$width}
 }
 function Add-QmCanvas($canvas,$element,[double]$x,[double]$y){[Windows.Controls.Canvas]::SetLeft($element,$x);[Windows.Controls.Canvas]::SetTop($element,$y);[void]$canvas.Children.Add($element)}
@@ -305,7 +560,8 @@ function Build-QmCard($cfg,$skin,[double]$sc){
   Add-QmCanvas $c $v $cell[2] ($cell[3]+14);$script:UI_SEGS[$cell[0]]=$v
  }
  $foot=New-QmText '延迟 — · 0 请求 · 0 工具' 9 $t.faint;$foot.Width=218;Add-QmCanvas $c $foot 14 214;$script:UI_FOOT=$foot
- $credit=New-QmText '余 — · 今 —' 9.5 $t.gray 'Medium';$credit.Width=198;Add-QmCanvas $c $credit 14 232;$script:UI_CREDIT=$credit
+ $credit=New-QmText '余 — · 今 —' 9.5 $t.gray 'Medium';$credit.Width=168;Add-QmCanvas $c $credit 14 232;$script:UI_CREDIT=$credit
+ Add-QmCanvas $c (New-QmStatsBadge $skin 22) 186 225
  Add-QmCanvas $c (New-QmGear $skin 22) 212 225
  return $b
 }
