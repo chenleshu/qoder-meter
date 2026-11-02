@@ -1,7 +1,7 @@
 ﻿# Qoder Meter Windows. 本机数据只读；账户余额与权益领取内置，无需外部脚本。
 param([switch]$NoTray,[string]$Pin='',[string]$Layout='',[switch]$AlwaysOn)
 $ErrorActionPreference='Stop'
-$script:QM_VERSION='1.4.0-win.3'
+$script:QM_VERSION='2.1.0'
 $root=Split-Path $PSScriptRoot -Parent
 trap {
  try{$d=Join-Path $env:APPDATA 'QoderMeter';[void][IO.Directory]::CreateDirectory($d);[IO.File]::AppendAllText((Join-Path $d 'meter.log'),(Get-Date -Format s)+' fatal '+$_.Exception.Message+' '+$_.ScriptStackTrace+"`r`n")}catch{}
