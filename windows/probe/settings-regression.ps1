@@ -16,7 +16,7 @@ $formatter=$ast.Find({param($n) $n -is [Management.Automation.Language.FunctionD
 . ([scriptblock]::Create($formatter.Extent.Text))
 $script:CFG_PATH=Join-Path ([IO.Path]::GetTempPath()) ('qm-settings-'+[guid]::NewGuid().ToString('N')+'.json')
 $script:QM_LC_STATE_DIR=Split-Path $script:CFG_PATH -Parent
-$script:QM_VERSION='2.1.0';$script:QM_SHUTDOWN=$false
+$script:QM_VERSION='2.1.1';$script:QM_SHUTDOWN=$false
 $script:UI=@{settings=$null;skin='paper'}
 $script:QM_CLAIMS_PATH=Join-Path $script:QM_SETTINGSD 'claims.json';$script:QM_CLAIMS=$null
 $script:ACCOUNT=@{Auth=$null;Usage=$null;Campaigns=$null;Running=$false;Error='';UsageAt=0L;CampAt=0L;NextTry=0L;LastFail=@{};Notified=$null;At=''}

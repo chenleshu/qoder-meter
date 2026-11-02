@@ -321,7 +321,7 @@ function Stop-QmInstance([switch]$IncludeWatcher) {
 function Get-QmWindowsVersion {
   $v = Get-Variable QM_VERSION -Scope Script -ErrorAction SilentlyContinue
   if ($v -and $v.Value) { return [string]$v.Value }
-  return '2.1.0'
+  return '2.1.1'
 }
 
 function Get-QmWindowsArchitecture {
