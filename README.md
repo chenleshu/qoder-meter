@@ -1,285 +1,159 @@
 # Qoder Meter
 
-> macOS 上给 Qoder 用的伴生状态条：实时显示当前会话的 TPS、本轮与总计时长、输出 Token、积分、请求数、工具调用和延迟，并跟随你当前打开的会话切换。
+给 Qoder Desktop 配一条轻量的会话状态条：查看生成速度、会话耗时、输出 Token 和积分消耗，并可按日 / 周 / 月汇总本机用量，不离开当前窗口。
 
-Qoder Meter 是一个轻量的 macOS 菜单栏/浮窗工具，用只读方式读取 Qoder 本地数据，在 Qoder 窗口的侧边栏、标题栏、窗口上方或窗口下方显示当前会话的实时指标。它不修改 Qoder，默认不联网，也不会上传任何会话内容；只有你点击设置里的「检查更新」时，才会访问 GitHub Releases 获取版本号。
+这是第三方独立伴生应用，不是 Qoder 官方插件，也不修改客户端。macOS 使用 JXA + AppKit，Windows 使用 PowerShell + WPF；两个平台分别维护，功能并不完全相同。
 
-> **不是 Qoder 官方插件。** Qoder 当前的 app plugin API 只开放工作区、设置页、会话资源侧栏和文件预览等视图，没有底部状态栏或侧边栏小挂件的插槽。因此本项目以独立伴生应用的形式实现，外观和操作尽量贴近 Qoder 的界面。
+[Windows 使用说明](windows/README.md) · [macOS 使用说明](macos/README.md) · [GitHub Releases](https://github.com/chenleshu/qoder-meter/releases)
 
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
+## 本次源码更新
 
----
+- **字段分隔线**：Windows 与 macOS 条形布局使用低对比度细竖线，分隔线纳入宽度计算，并与所依附的字段一起显示或隐藏。
+- **稳定条形宽度**：macOS 条形两端按启用字段、字号和可用空间预留容量，运行中的数字、标题、TPS、计时和账户文案只更换槽位内文字，不改变外框或相邻列位置；空间或配置变化时才重算。
+- **macOS 统计粒度与无右键操作**：用量统计支持「按日 / 按周 / 按月」，并可切换总览 / 明细；面板底部提供刷新、设置、更多操作与关闭，「更多操作」调用菜单栏左键菜单，不依赖状态条右键。粒度、视图与范围随设置保存。
+- **Windows 紧凑条形**：字段按当前内容使用自然宽度，不再为数字预留固定列位；默认关闭状态、工具、请求三项，数字变长时条形只扩展到实际需要。
+- **Windows 图文菜单**：右键与托盘菜单按快捷会话、外观布局、账户应用分组，使用系统线性图标、停靠位置示意图、主题色块和账户摘要；字段开关分为速度与时间、用量与账户、会话与活动三组。
+- **Windows 账户功能内置**：余额读取、权益领取、领取历史不再依赖外部脚本；正常状态下显示 `余 5,730 · 今 +4,096`，无本机领取记录时显示 `今 +0`。有待领权益、领取中或账户异常时仍优先显示相应状态。
+- **Windows 设置与领取记录**：设置按账户与权益、显示位置与外观、状态条字段、会话与启动分成卡片，余额、套餐构成、活动包与今日到账集中在顶部；领取记录按天从新到旧分组，显示当天合计、领取时间、到期时间与适用范围，无记录时提供空状态引导。按钮、复选、下拉框和滚动条统一跟随皮肤。
+- **跨平台图文用量统计**：Windows 与 macOS 都改为「总览 / 明细」仪表盘，提供积分 / Token / 请求 / 活跃天摘要卡、最多最近 12 期趋势柱、模型占比和今天 / 近 7 天 / 本月 / 全部规则摘要；明细每页 6 期并显示行内条形。Windows 状态条齿轮左侧新增图表入口，设置卡片提供迷你趋势预览；macOS 不依赖右键，统计面板底部直接提供刷新、设置、更多操作和关闭。数据仍只读本机 Qoder 会话日志，不上传、不调用 AI。
+- **macOS 每日 100 Credits 自动领取**：状态条菜单与设置新增 Credits 区块，登录走 Qoder 官方设备授权（浏览器确认，PKCE），令牌以 `0600` 存本机。开启后由独立 LaunchAgent 每小时检查一次，Qoder 未启动也能领取；只匹配 `CLAIM_BENEFIT` + `CREDITS` + `amount=100` 的活动。macOS 仍不查询余额、没有领取历史列表，Windows 的余额展示与 400 条账本没有移植。
+- **说明与截图整理**：按平台列出能力、安装方式和数据口径；Windows 图片（含新增统计窗口）由当前源码的真实 WPF 控件离线渲染，全部使用示例数据。
 
-## 截图
+这批更新位于 `restructure` 分支，源码版本号统一升到 **2.1.0**（macOS `2.1.0` / build 16，Windows `QM_VERSION=2.1.0`），属于源码更新，不等于已经发布新的安装包。下方安装命令显式拉取该分支。
+
+## 界面预览
+
+### Windows：深色与浅色状态条
+
+![Windows 深色状态条：字段细竖线、会话消耗与账户积分](windows/docs/screenshots/title-graphite.png)
+
+![Windows 浅色状态条：同一布局随主题切换](windows/docs/screenshots/title-paper.png)
+
+窄空间下隐藏次要字段，对应的分隔线同步移除：
+
+![Windows 紧凑状态条](windows/docs/screenshots/toolbar-graphite.png)
+
+Windows 右键与托盘使用同一套图文分组菜单，保留原生键盘导航、子菜单与勾选反馈：
+
+![Windows 图文分组菜单](windows/docs/screenshots/menu-graphite.png)
 
 <table>
   <tr>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/sidebar-card@2x.png" width="300" alt="侧边栏卡片"><br>
-      <sub>侧边栏卡片（可拖动、默认位置）</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="docs/screenshots/settings.png" width="330" alt="设置窗口"><br>
-      <sub>独立设置窗口（皮肤、字号、Token 单位、显示内容与版本检查）</sub>
-    </td>
+    <td width="34%" align="center"><img src="windows/docs/screenshots/sidebar-graphite.png" width="220" alt="Windows 完整统计卡片"><br>完整统计卡片</td>
+    <td width="66%" align="center"><img src="windows/docs/screenshots/settings-paper.png" width="330" alt="Windows 设置中的账户摘要与分组卡片"><br>设置：分组卡片与账户摘要</td>
   </tr>
 </table>
 
-<p align="center">
-  <img src="docs/screenshots/top-bar@2x.png" width="820" alt="窗口上方贴外状态条"><br>
-  <sub>窗口上方（贴外）：Qoder 窗口正上方、左对齐，左端在 Dock 访达图标左侧</sub>
-</p>
+<table>
+  <tr>
+    <td align="center"><img src="windows/docs/screenshots/claims-paper.png" width="330" alt="Windows 领取记录按天分组"><br>领取记录：按天分组与当天合计</td>
+    <td align="center"><img src="windows/docs/screenshots/claims-paper-empty.png" width="330" alt="Windows 领取记录空状态"><br>空状态：说明记录来源与自动领取</td>
+  </tr>
+</table>
 
-<p align="center">
-  <img src="docs/screenshots/title-bar@2x.png" width="760" alt="窗口标题栏紧凑条"><br>
-  <sub>窗口标题栏内嵌：右侧紧凑条，避开窗口按钮与标题</sub>
-</p>
+<table>
+  <tr>
+    <td align="center"><img src="windows/docs/screenshots/stats-graphite.png" width="330" alt="Windows 用量统计总览"><br>总览：摘要卡与趋势图</td>
+    <td align="center"><img src="windows/docs/screenshots/stats-summary-paper.png" width="330" alt="Windows 模型占比与自动摘要"><br>模型占比与自动摘要</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="windows/docs/screenshots/stats-detail-paper.png" width="330" alt="Windows 用量统计明细"><br>明细：逐期条形与分页</td>
+    <td align="center"><img src="windows/docs/screenshots/settings-paper.png" width="330" alt="Windows 设置中的统计预览图"><br>设置：统计入口旁迷你预览</td>
+  </tr>
+</table>
 
-<p align="center">
-  <img src="docs/screenshots/bottom-bar@2x.png" width="820" alt="窗口下方贴外状态条"><br>
-  <sub>窗口下方（贴外）：贴在 Qoder 窗口外侧下方，不压输入框</sub>
-</p>
+以上是 Windows 真实控件的 2× 离线渲染，不包含真实会话或账户信息。macOS 未变化的卡片与旧版统计面板原生截图见[平台说明](macos/README.md#界面预览)；macOS 新版图文仪表盘、趋势柱、自动摘要和无右键面板操作目前只完成离线逻辑与控件树验证，仍需在 Mac 上生成原生截图，不能把 Windows 图片当作 macOS 实测结果。
 
-<p align="center">
-  <img src="docs/screenshots/stats.png" width="420" alt="用量统计面板"><br>
-  <sub>用量统计：齿轮旁的统计图标向下展开；紧凑排版与分页，按天和按模型汇总</sub>
-</p>
+## 平台与功能
 
-> 截图中的会话名称和数值为演示数据，不包含真实用户会话。
+| 能力 | Windows | macOS |
+| --- | --- | --- |
+| 当前源码内应用版本号 | 2.1.0 | 2.1.0 |
+| 系统 | Windows 11 已开发验证；Windows 10 2004+ 待完整验收 | macOS 13+ |
+| 实现 | Windows PowerShell 5.1、WPF、系统 DLL | JXA、AppKit、系统构建工具 |
+| 会话指标、细竖线、主题、字号 | 支持 | 支持 |
+| 条形宽度 | 按内容自然宽度，默认隐藏状态、工具、请求 | 固定容量，不随内容伸缩 |
+| 自动跟随 / 固定会话 | 支持 | 支持 |
+| 停靠位置 | 标题栏、会话工具栏、输入框下方、完整卡片 | 标题栏、窗口上方、窗口下方、侧栏卡片 |
+| 消费统计 | 支持 7 天、近 30 天、本月、近一年；总览含趋势、模型占比与自动摘要，明细按日 / 周 / 月分页 | 支持 7 天、近 30 天、本月、近一年；同样提供总览 / 明细、趋势、模型占比与自动摘要 |
+| Token 单位切换 | 当前采用 k / m 等缩写 | 支持 b / m / k 与 亿 / 万 |
+| 账户余额与权益领取 | 支持，需联网 | 领取支持，需联网；**不查询余额** |
+| 领取记录 | 本机记录，最多 400 条 | 仅当日状态与最近一次结果，无历史列表 |
+| 手动检查更新 | 只接受兼容的 Windows 发布资产 | 检查 macOS 发布版本 |
 
-## 功能
-
-- **四种显示形态**
-  - `侧边栏卡片`：放在 Qoder 左侧栏空白区，可拖动，位置按布局记忆。
-  - `窗口标题栏（融入顶部）`：在 Qoder 标题栏右侧显示自适应紧凑条，宽度由启用的指标和字号计算，避开窗口按钮和标题；可拖动微调。
-  - `窗口上方（贴外）`：贴在 Qoder 窗口正上方外侧，与窗口左边缘对齐（左端在 Dock 访达图标左侧）；窗口上方空间不足时改用标题栏右侧紧凑条；全屏时收成屏幕顶部细线，悬停展开。
-  - `窗口下方（贴外）`：贴在 Qoder 窗口外侧下方；窗口下方空间不足时自动收成一条 4px 细线，悬停展开；全屏时同样收成底部细线。
-- **实时指标**
-  - 当前轮 TPS，以及最近 14 次请求的迷你趋势。
-  - 本轮时长 / 会话总时长。
-  - 会话输出 Token（当前模型不返回 token 时为估算值，标注 `≈`）。
-  - 已用积分（精确值）。
-  - 请求数、工具调用数、最近请求延迟。
-  - 模型、生成中/本轮中/空闲状态。
-- **每日用量统计**
-  - 自动汇总本地会话日志，按天统计积分、Token、请求数，并按模型拆分。
-  - 状态条齿轮旁新增统计图标，点击后从状态条向下展开面板；再次点击收起。
-  - 支持 `7 天` / `近 30 天` / `本月` / `近一年` 四个范围。
-  - 三种显示方式：`悬停显示`（鼠标移到统计图标展开）、`直接显示`（常驻摘要 + 最近 5 天）、`分页显示`（每页 5 天，可翻页）。
-  - 模型名按 Qoder 自带标签校准（如 `dfmodel` → `DeepSeek-V4-Flash`、`qfmodel` → `Qwen3.8-Flash`），未知模型保留原标识。
-  - 面板宽高随模型名、日期行和分页状态自动收紧，减少空白。
-  - 可从设置窗口「用量统计」、菜单栏或状态条图标打开；面板内可切换范围、显示方式并手动刷新。
-  - 统计的是实际用量，不包含账号每日权益余额或领取状态。
-- **跟随当前会话**
-  - 读取 Qoder 本地 `lastRoute`，跟随你正在打开的会话，而不是“最近一次提问”的会话。
-  - 也可以在菜单里固定某个会话；设置窗口可恢复自动跟随。
-- **自适应宽度与字号**
-  - 状态条宽度由启用的指标和字号自动计算，不再使用固定 640/800/960 预设。
-  - 字号提供 `小 / 标准 / 大 / 特大` 四档，高度与宽度同步调整；作用于标题栏、窗口上方和下方状态条，卡片保持固定排版。
-  - 可在设置窗口或菜单栏「显示内容」中开关：TPS、本轮、总计、Token、积分、请求、工具、延迟、状态、标题。
-  - Token 单位可在 `b / m / k` 与 `亿 / 万` 之间切换，设置窗口「显示内容」右侧或菜单栏「Token 单位」均可调整；状态条与用量统计同步生效，宽度随之自适应。
-  - 侧边栏卡片始终显示完整摘要，不受状态条内容开关影响。
-- **外观与位置**
-  - 六套皮肤：自动 / 纸白 / 石墨 / 海盐 / 暮色 / 暖砂。
-  - 「自动」优先跟随 Qoder 的浅色/深色外观，读不到时跟随系统。
-  - 放大字号与行距，卡片带轻高光和更柔和的圆角。
-  - 侧边栏卡片可拖动；标题栏条可横向拖动；位置持久化，并可重置。
-  - Qoder 不在最前台时，卡片和状态条自动隐藏；回到 Qoder 后恢复显示。
-  - 全屏时贴外状态条自动收成屏幕边缘细线，悬停展开，避免覆盖 Qoder 工具栏。
-- **启动与退出**
-  - 随 Qoder 自动启动（LaunchAgent 守护）。
-  - Qoder 退出时自动关闭（可关闭）。
-  - 手动退出后本次 Qoder 会话内不会反复拉起，下次 Qoder 启动会再出现。
-- **设置入口**
-  - 卡片右下角齿轮。
-  - 标题栏/下方状态条右端齿轮。
-  - 菜单栏 `◉ TPS` → `设置…`。
-- **检查更新**
-  - 设置窗口右上角显示当前版本，点击「检查更新」才会访问 GitHub Releases。
-  - 有新版本时按钮变为「获取更新」，打开对应 Release 页面。
-- **只读、本地、默认离线**
-  - 不发送会话数据，不包含遥测；联网仅限手动检查更新。
-
-## 环境要求
-
-- macOS 13 或更高版本（Apple Silicon / Intel）。
-- Qoder macOS 桌面版（开发时基于 `0.4.11` 测试）。
-- 不需要安装 Node、Python 或其他运行时；构建只依赖 macOS 自带的 `osacompile`、`PlistBuddy` 和 `codesign`。
-- 用量统计使用系统 `jq` 解析会话 JSONL（近版 macOS 自带；旧系统可执行 `brew install jq`）。缺少 `jq` 时状态条仍可用，统计面板会显示为空。
+两个版本号独立推进。不要将某个平台的截图、用量面板或账户能力理解为另一个平台也已经具备。
 
 ## 快速开始
 
-```bash
-git clone https://github.com/chenleshu/qoder-meter.git
-cd qoder-meter
-./build.sh
-open QoderMeter.app
+### Windows
+
+> Windows 版启动后会读取本机 Qoder 登录态并查询账户。源码默认开启自动领取可领权益；可在设置中关闭自动领取，但关闭后仍会查询余额和活动。活动接口返回空列表时，会用 Qoder 本地缓存中的活动响应补齐，并按天去重避免重复领取。请先阅读[账户行为与数据口径](windows/README.md#账户积分与权益)。
+
+```powershell
+git clone --branch restructure https://github.com/chenleshu/qoder-meter.git
+cd qoder-meter\windows
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutoStart -StartNow
 ```
 
-或者安装到用户的应用目录：
+安装目录为 `%LOCALAPPDATA%\QoderMeter\app`。`-NoAutoStart` 表示保留已有自启动配置、不新增启动守护，不会替已开启自启动的用户关闭它。也可使用 `windows/启动 Qoder 状态条.cmd` 直接运行源码。
+
+### macOS
 
 ```bash
+git clone --branch restructure https://github.com/chenleshu/qoder-meter.git
+cd qoder-meter/macos
 ./install.sh
 ```
 
-`install.sh` 会构建并复制到 `~/Applications/QoderMeter.app`，然后启动。
+构建并安装到 `~/Applications/QoderMeter.app`。界面与构建只用 macOS 自带工具，不要求 Node；消费统计面板需要可用的 `jq`。Credits 领取需要 `/usr/bin/python3`（macOS 命令行开发者工具），不使用领取功能时不会碰到它。应用采用本地 ad-hoc 签名，未经过 Apple 公证，首次打开可能需要在系统安全设置中确认。
 
-也可以从 [Releases](https://github.com/chenleshu/qoder-meter/releases) 下载打包好的应用。
+## 日常使用
 
-> 本项目使用 ad-hoc 本地签名，没有经过 Apple 公证。如果 macOS 首次阻止打开，请在“系统设置 → 隐私与安全性”中允许，或右键应用选择“打开”。
+- **打开设置**：点击齿轮；Windows 也可左键点击托盘图标，macOS 可从菜单栏进入。
+- **选择布局**：条形视图适合常驻查看，卡片适合完整摘要。每个布局独立记忆位置，重置只影响当前布局。
+- **调整密度**：开关条形视图字段、选择四档字号。完整卡片仍为固定排版，不受条形字段开关和字号影响。
+- **查看详细数据**：悬停状态条，Windows 会弹出与界面同风格的主题卡片，分栏显示会话、模型、六格关键指标、余额构成、领取明细与诊断。
+- **查看用量统计**：Windows 可点击状态条齿轮左侧的图表入口，也可从托盘或设置打开；macOS 可点击齿轮左侧统计图标、菜单栏入口或设置中的「用量统计」。两端均支持总览 / 明细、范围、粒度和显示模式，选择独立保存。Windows 优先使用 10 分钟内缓存，点「刷新」才会重扫本机日志；macOS 面板底部另有刷新、设置、更多操作和关闭，无需右键。
+- **切换会话**：默认自动跟随打开的会话，也可选择并固定；固定后需恢复自动跟随才能继续自动切换。
+- **控制启动**：自启动、随 Qoder 退出均可设置。手动退出会抑制当前 Qoder 进程生命周期内的自动拉起。
+- **领取每日 Credits**：macOS 在菜单栏或设置右侧按钮点「登录 Qoder」，浏览器确认后当天起自动领取 100 Credits；Windows 复用本机 Qoder 登录态，源码默认开启自动领取，可在设置关闭。两端的领取状态都不影响本地用量统计的口径。
 
-## 使用
+## 指标怎么读
 
-### 打开设置
-
-- 点击卡片右下角的 **齿轮**；
-- 或点击标题栏/下方状态条右端的 **齿轮**；
-- 或点击菜单栏的 `◉ TPS` → **设置…**。
-
-设置窗口可以调整：
-
-- 随 Qoder 自动启动
-- Qoder 退出时关闭
-- 显示位置（侧边栏 / 标题栏 / 窗口上方 / 窗口下方）
-- 字号（小 / 标准 / 大 / 特大）
-- 外观（自动 / 纸白 / 石墨 / 海盐 / 暮色 / 暖砂）
-- 显示内容（TPS、本轮、总计、Token、积分、请求、工具、延迟、状态、标题）
-- 是否在下方空间不足时自动隐藏
-- 自动跟随当前打开的会话
-- 用量统计（打开统计面板）
-- 检查更新（显示当前版本，按需访问 GitHub Releases）
-- 重置当前位置
-
-### 显示形态
-
-| 形态 | 位置 | 遮挡情况 |
-| --- | --- | --- |
-| 侧边栏卡片 | Qoder 左侧栏空白区 | 不遮挡聊天区；卡片可拖动 |
-| 窗口标题栏 | Qoder 标题栏右侧自适应紧凑条 | 避开窗口按钮和标题；宽度随内容与字号变化；可拖动 |
-| 窗口上方（贴外） | Qoder 窗口正上方外侧，左对齐 | 不覆盖聊天区；宽度随内容自适应；空间不足时改用标题栏紧凑条；全屏时收成顶部细线 |
-| 窗口下方（贴外） | Qoder 窗口外侧下方 | 不压输入框；宽度随内容自适应；空间不足或全屏时自动隐藏为细线 |
-
-### 皮肤与自动配色
-
-- `自动`：读取 Qoder 的 `effectiveAppearance`，跟随 Qoder 的浅色/深色；读不到时按系统外观在纸白和石墨之间切换。
-- `纸白`、`海盐`、`暖砂`为浅色皮肤；`石墨`、`暮色`为深色皮肤。
-- 设置窗口会随所选皮肤切换深浅色，皮肤变化无需重启。
-
-### 用量统计
-
-- 打开方式：状态条齿轮左侧的统计图标（点击向下展开，再次点击收起），或设置窗口底部的「用量统计」、菜单栏 `◉` → `用量统计…`。
-- 范围：`7 天`、`近 30 天`、`本月`、`近一年`；范围按钮在统计面板顶部。
-- 汇总：总积分、总 Token、请求数；下方按模型列出积分和 Token。
-- 模型名：运行时读取 Qoder 资源里的 `model.<id>.label`，并以内置映射兜底，所以本地日志中的 `dfmodel`、`qfmodel`、`qmodel_38max` 会显示为可读名称。
-- 按天：每天显示总积分 / Token，以及当日各模型的积分 / Token；分页模式每页 5 天。
-- 显示方式：
-  - `悬停显示`：鼠标移到统计图标上展开，移开后自动收起；点击图标可固定。
-  - `直接显示`：统计面板常驻，显示摘要、模型和最近 5 天。
-  - `分页显示`：统计面板常驻，按天分页，可前后翻页。
-- 面板宽度会按模型名长度调整，高度按模型行数、日期行数和是否存在翻页收紧。
-- Token 单位跟随「Token 单位」设置：`b / m / k` 或 `亿 / 万`；状态条、摘要卡、模型列和按天列表使用同一单位。
-- 统计结果来自本地会话日志，缓存 10 分钟；点击面板「刷新」会重新扫描。
-- 统计的是实际用量，不包含账号每日权益余额或领取状态。
-
-### 会话跟随
-
-默认自动跟随 Qoder 当前打开的会话。切换会话后约 1–2 秒内更新。
-
-如果从菜单里“选择会话”固定了某个会话，自动跟随会暂停；在设置里重新勾选“自动跟随当前打开的会话”，或点击菜单里的对应项即可恢复。
-
-### 自动启动
-
-开启“随 Qoder 自动启动”后，会安装一个用户级 LaunchAgent：
-
-- `~/Library/LaunchAgents/com.qoder.meter.watch.plist`
-- `~/Library/Application Support/QoderMeter/watch.sh`
-
-守护脚本每几秒检查 Qoder 是否运行：Qoder 启动时拉起 Qoder Meter；Qoder 退出时按设置决定是否关闭。关闭此选项会卸载并删除守护脚本。
-
-如果移动了 `QoderMeter.app` 的位置，请关闭再打开一次“随 Qoder 自动启动”，让守护脚本更新路径。
-
-## 数据来源
-
-全部为**本地只读**：
-
-- `~/Library/Application Support/com.qoder.app.stable/main.sqlite`：会话、上下文统计、模型等。
-- `~/.qoder/projects/.../<session>.jsonl`：每条助手消息、积分、Token 字段。
-- `~/.qoder/logs/sessions/.../<session>/segments/*.jsonl`：模型请求起止时间、本轮边界。
-- `~/Library/Application Support/com.qoder.app.stable/Local Storage/leveldb`：当前打开会话的 `lastRoute`。
-
-不会写入 Qoder 的数据库或日志。
-
-## 指标口径
-
-| 指标 | 来源/口径 |
+| 指标 | 含义与边界 |
 | --- | --- |
-| 本轮 TPS | 本轮各次模型调用的输出量 / 耗时加权平均，含思考与工具参数 |
-| 本轮时长 | 当前轮从开始到最近活动或现在的时长 |
-| 总计 | 从会话创建至今的时长 |
-| Token | 会话输出 Token；模型返回精确值时用精确值，否则按中英文字符和工具参数估算 |
-| 积分 | Qoder 本地 usage 中的 credits，精确值 |
-| 请求 / 工具 / 延迟 | 模型请求数、tool_use 调用数、最近一次模型请求耗时 |
+| TPS | 本轮匹配到的输出量 / 模型请求耗时，不是瞬时解码速度或网络测速 |
+| 本轮 | 当前轮的经过时间 |
+| 总计 | 从会话创建到现在的时间，不等于持续工作时长 |
+| Token | 会话输出量；模型缺少精确值时按文本、思考及工具参数估算，估算展示带 `≈` |
+| 积分 / 消耗 | 本地账单中记录的会话 Credits，不等于账户余额变化 |
+| 用量统计 | 只汇总本机日志中带积分的助手请求，按本机日期分桶；精确用量优先，缺失时估算并标 `≈`，结果不等同官方账单 |
+| 延迟 | 最近一次模型请求耗时，不是首 Token 延迟 |
+| 余额（Windows） | 套餐、加赠与有效活动包剩余合计；专属活动积分不一定适用于所有模型 |
+| 今日领取（Windows） | 本机 Meter 记录的当前权益周期领取积分；UTC+8 每天 10:00 换周期，不是跨设备完整账单 |
 
-Qoder 的 `dfmodel` 在本地日志中返回的 `output_tokens` 为 0，因此在这种情况下 TPS 和 Token 是估算值，界面中用 `≈` 标注。换成会返回精确 token 的模型时会自动使用精确值。
+当前混合精确 / 估算输出的会话仍优先展示已有精确累计部分，不应据此认定覆盖了全会话的全部输出。请勿将估算 Token 当作官方计费依据。
 
-延迟字段位于状态条右侧；启用时不会被中间指标截断。如果当前轮还没有已完成的模型请求，会显示 `延迟 —`，等首次请求完成后自动填上。
+## 数据与隐私
 
-上下文占用百分比**不显示**，因为 Qoder 输入框已经自带该信息。
+两端只读 Qoder 的数据库、会话 JSONL 和 segment 日志，不修改客户端、不上传会话内容、无遥测。工具自身会保存设置、日志和必要缓存。
 
-## 隐私
+- **macOS**：手动检查更新时访问 GitHub；Credits 领取只在用户于 Meter 内完成设备授权登录后，才访问 `openapi.qoder.sh` 的活动列表与领取接口，未登录时不会发出任何请求。设备令牌与刷新令牌以 `0600` 存在本机 `qoder-credits.json`，不保存账号密码、不写进日志；消费统计缓存保存在本机。
+- **Windows**：另会向 `openapi.qoder.sh` 查询余额、活动及提交领取。登录令牌从本机安全存储读取，只在内存中使用并用于官方账号接口认证，不保存账号密码。关闭自动领取不等于关闭账户联网功能。本地用量统计只读会话日志，不需要账户令牌，也不发起网络请求。
 
-- 默认不发起网络请求，不包含遥测或账号上传。
-- 只有点击「检查更新」时，才会向 `api.github.com` 请求最新 Release 的版本号与链接；不发送会话数据。
-- 不上传会话标题、消息内容、Token 或积分。
-- 用量统计只读取本地会话 JSONL，缓存写入 `~/Library/Application Support/QoderMeter/stats-cache.json`，不会联网。
-- 所有数据仅在本地进程内存中处理。
-- 截图使用演示会话名与演示数据。
+## 验证与已知限制
 
-## 已知限制
+- Windows 的语法检查、界面 / 设置 / 交互回归、统计窗口与模拟账户测试及离线截图命令见[Windows 验证说明](windows/README.md#开发与验证)。测试夹具不会触发真实领取，也不会读取真实日志或账户。
+- macOS 的原生构建、四组离线回归（布局 / 统计分组 / 统计面板 / Credits 状态机）与截图说明见[macOS 开发与验证](macos/README.md#开发与验证)。Windows 无法验证 AppKit 的原生字体、窗口行为或签名构建。
+- 停靠并非 Qoder 原生插槽。客户端布局、缩放或侧栏宽度变化后可能需要微调；多窗口、混合 DPI 多显示器和中国区客户端仍有待完整验收的场景。
+- 本地数据格式与账号接口可能随 Qoder 升级变化；大日志首次扫描、Windows 统计刷新及同步账户请求可能导致短暂卡顿。本地用量统计只覆盖仍保留的日志，窗口打开后需手动刷新；本地 Credits 与估算 Token 不是官方账单。
 
-- **不是 Qoder UI 插件**：Qoder 当前没有底部状态栏/侧边栏挂件插槽，因此这是独立伴生应用。
-- 上方“贴外”模式依赖 Qoder 窗口上方有可用空间；窗口贴近菜单栏时会改用标题栏右侧紧凑条；全屏时改为屏幕顶部细线，悬停展开。
-- 下方“贴外”模式依赖 Qoder 窗口下方有可用空间；全屏或贴近 Dock 时会切换为自动隐藏的底部细线，悬停展开。
-- 标题栏紧凑条固定在窗口右侧，可能覆盖右侧工具栏的一小段；可向左拖动微调。
-- 侧边栏卡片为完整详情视图，使用固定排版，不随状态条的内容开关和字号变化。
-- 状态条宽度会自动适配内容；如果窗口过窄，超出的指标会被截断，可关闭部分显示内容。
-- 用量统计的 Token 在模型不返回精确值时为估算值，界面用 `≈` 标注；统计缓存约 10 分钟，可手动刷新。
-- Qoder 本地数据不包含账号每日权益余额/领取状态，因此统计面板只展示实际用量。
-- 如果同时打开多个 Qoder 窗口，`lastRoute` 可能反映最后一次导航的窗口，而不是当前焦点窗口。
-- 仅支持 macOS。
+## 项目结构
 
-## 卸载
-
-```bash
-./uninstall.sh          # 移除应用和 LaunchAgent
-./uninstall.sh --purge  # 同时删除设置与日志
+```text
+macos/      JXA 主程序、Credits 领取脚本、构建安装脚本、探针与 macOS 截图
+windows/    PowerShell / WPF 实现、安装卸载、回归与 Windows 截图
+.github/    macOS 构建与 Windows 语法检查工作流
 ```
 
-或在设置中关闭“随 Qoder 自动启动”，退出应用后手动删除：
-
-- `~/Applications/QoderMeter.app`
-- `~/Library/LaunchAgents/com.qoder.meter.watch.plist`
-- `~/Library/Application Support/QoderMeter`
-- `~/Library/Logs/QoderMeter.log`
-
-## 开发
-
-```bash
-./build.sh
-```
-
-核心文件：
-
-- `src/main.js`：JXA + AppKit 应用逻辑（数据读取、UI、设置窗口、守护配置）。
-- `build.sh`：使用 `osacompile` 构建 `.app`，写入 Info.plist 并 ad-hoc 签名。
-- `docs/screenshots/`：README 演示截图。
-
-项目使用 macOS 自带的 JavaScript for Automation（JXA），不依赖外部 npm 包。
-
-## 免责声明
-
-Qoder Meter 是第三方开源工具，与 Qoder 官方无关联。它只读取本地数据，不修改 Qoder；Qoder 版本升级后本地数据结构可能变化，届时可能需要更新解析逻辑。
-
-## License
-
-[MIT](LICENSE)
+本项目与 Qoder 官方无关联。[MIT License](LICENSE)。
