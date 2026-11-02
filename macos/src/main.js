@@ -7,7 +7,9 @@
  *   - ~/.qoder/projects/.../<session>.jsonl
  *   - ~/.qoder/logs/sessions/.../<session>/segments/*.jsonl
  *
- * It never writes to Qoder data and never touches the network.
+ * It never writes to Qoder data. Network access is opt-in only: the manual
+ * update check reads GitHub Releases, and the daily Credits claim calls the
+ * Qoder open API with credentials stored under ~/Library/Application Support.
  */
 
 ObjC.import('Cocoa');
@@ -31,6 +33,10 @@ const WATCH_SCRIPT = SETTINGS_DIR + '/watch.sh';
 const WATCH_LOG = SETTINGS_DIR + '/watch.log';
 const PAUSE_FLAG = SETTINGS_DIR + '/autostart-paused';
 const KEEP_FLAG = SETTINGS_DIR + '/keep-running';
+const CRED_PATH = SETTINGS_DIR + '/qoder-credits.json';
+const CRED_STATE_PATH = SETTINGS_DIR + '/qoder-credits-state.json';
+const CRED_LOGIN_PATH = SETTINGS_DIR + '/qoder-login.json';
+const CRED_AGENT_PLIST = HOME + '/Library/LaunchAgents/com.qoder.meter.credits.plist';
 
 let BAR_H_TITLE = 28;
 let BAR_H_TOP = 32;
@@ -349,7 +355,25 @@ const state = {
   lastError: '',
   segCheckAt: 0,
   sdkRetryAt: 0,
-  lastTooltip: ''
+  lastTooltip: '',
+  autoClaim: true,
+  creditLoggedIn: false,
+  creditEmail: '',
+  creditClaimedToday: false,
+  creditOutcome: '',
+  creditMessage: '',
+  creditSignInExpired: false,
+  creditNextCheckAt: 0,
+  creditPendingLogin: false,
+  creditLoginStatus: '',
+  creditLoginMessage: '',
+  creditBusy: false,
+  creditBusyAt: 0,
+  creditBusyMark: '',
+  creditTickAt: 0,
+  creditAutoAt: 0,
+  creditNotifiedKey: '',
+  creditLastOutcome: ''
 };
 
 let app = null;
@@ -397,6 +421,8 @@ let settingsThemePopup = null;
 let settingsBottomAutoHide = null;
 let settingsUpdateButton = null;
 let settingsUpdateLabel = null;
+let settingsAutoClaim = null;
+let settingsCreditButton = null;
 let settingsHeaderBox = null;
 let settingsHeaderIcon = null;
 
@@ -688,6 +714,7 @@ function loadSettings() {
       }
       // 非法或缺失的 statsView 一律回到总览，保证重开面板的默认形态稳定。
       state.statsView = statsViewModel(obj.statsView);
+      if (typeof obj.autoClaim === 'boolean') state.autoClaim = obj.autoClaim;
     }
     const fm = $.NSFileManager.defaultManager;
     state.autoStart = !!fm.fileExistsAtPath(WATCH_PLIST);
@@ -714,13 +741,288 @@ function saveSettings() {
       statsRange: state.statsRange,
       statsGroup: state.statsGroup,
       statsView: statsViewModel(state.statsView),
-      bottomAutoHide: state.bottomAutoHide
+      bottomAutoHide: state.bottomAutoHide,
+      autoClaim: state.autoClaim
     };
     const s = $.NSString.alloc.initWithString(JSON.stringify(obj, null, 2));
     s.writeToFileAtomicallyEncodingError(SETTINGS_PATH, true, $.NSUTF8StringEncoding, null);
   } catch (e) {
     logError('saveSettings', e);
   }
+}
+
+/* ---------------------------------------------------------------- credits */
+
+function readJsonFile(path) {
+  try {
+    const text = readString(path);
+    if (!text) return null;
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
+function creditHelperPath() {
+  try {
+    const p = $.NSBundle.mainBundle.resourcePath.js + '/credits.py';
+    if ($.NSFileManager.defaultManager.fileExistsAtPath(p)) return p;
+  } catch (e) {}
+  return '';
+}
+
+// 领取窗口以 UTC+8 的 10:00 为日界，早于 10:00 时算前一天，避免跨零点是当天。
+function creditDayKey() {
+  const now = new Date(Date.now() + 8 * 3600 * 1000);
+  const hour = now.getUTCHours();
+  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const day = new Date(hour < 10 ? midnight - 86400000 : midnight);
+  return day.getUTCFullYear() + '-' + pad2(day.getUTCMonth() + 1) + '-' + pad2(day.getUTCDate());
+}
+
+function creditTimeMs(value) {
+  if (!value) return 0;
+  const ms = Date.parse(String(value));
+  return isNaN(ms) ? 0 : ms;
+}
+
+function refreshCreditState() {
+  const cred = readJsonFile(CRED_PATH) || {};
+  const st = readJsonFile(CRED_STATE_PATH) || {};
+  const login = readJsonFile(CRED_LOGIN_PATH) || {};
+  state.creditLoggedIn = !!cred.deviceToken;
+  state.creditEmail = cred.email || '';
+  state.creditClaimedToday = !!st.claimedDay && st.claimedDay === creditDayKey();
+  state.creditOutcome = st.outcome || '';
+  state.creditMessage = st.message || '';
+  state.creditSignInExpired = !!st.signInExpired;
+  state.creditNextCheckAt = creditTimeMs(st.nextCheckAt);
+  state.creditPendingLogin = login.status === 'pending';
+  state.creditLoginStatus = login.status || '';
+  state.creditLoginMessage = login.message || '';
+  return st;
+}
+
+function creditMenuTitle() {
+  if (state.creditPendingLogin) return '等待浏览器完成 Qoder 登录…';
+  if (!state.creditLoggedIn) return '登录 Qoder，领取每日 100 Credits…';
+  if (state.creditSignInExpired) return 'Qoder 登录已失效，点击重新登录…';
+  if (state.creditClaimedToday) return '今日已领 100 Credits ✓';
+  if (state.creditBusy) return '正在领取今日 100 Credits…';
+  return '领取今日 100 Credits';
+}
+
+function creditMenuAction() {
+  if (state.creditPendingLogin) return 'showCreditLogin:';
+  if (!state.creditLoggedIn || state.creditSignInExpired) return 'loginCredits:';
+  return 'claimCreditsNow:';
+}
+
+function notifyUser(title, text) {
+  try {
+    const esc = function (s) {
+      return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    };
+    sh('/usr/bin/osascript -e ' +
+      q('display notification "' + esc(text) + '" with title "' + esc(title) + '"'));
+  } catch (e) {}
+}
+
+function runCreditsBg(args, mark) {
+  const helper = creditHelperPath();
+  if (!helper) {
+    notifyUser('Qoder Credits', '找不到领取组件，请重新安装 Qoder Meter');
+    return false;
+  }
+  sh('/bin/mkdir -p ' + q(SETTINGS_DIR));
+  sh('/usr/bin/nohup /usr/bin/python3 ' + q(helper) + ' ' + args + ' >/dev/null 2>&1 &');
+  state.creditBusy = true;
+  state.creditBusyAt = Date.now();
+  state.creditBusyMark = mark || '';
+  state.creditNotifiedKey = '';
+  return true;
+}
+
+function startCreditLogin() {
+  if (state.creditBusy) return;
+  refreshCreditState();
+  const mark = state.creditLoginStatus + '|' + Date.now();
+  if (runCreditsBg('login', mark)) {
+    notifyUser('Qoder Credits', '已打开浏览器，请登录 Qoder 并授权本设备');
+    log('credit login started');
+  }
+}
+
+function showCreditLogin() {
+  try {
+    const login = readJsonFile(CRED_LOGIN_PATH) || {};
+    if (login.url) sh('/usr/bin/open ' + q(login.url));
+  } catch (e) {}
+}
+
+function claimCreditsNow() {
+  if (state.creditBusy) {
+    notifyUser('Qoder Credits', '正在领取中，请稍候');
+    return;
+  }
+  refreshCreditState();
+  if (!state.creditLoggedIn) {
+    startCreditLogin();
+    return;
+  }
+  const st = readJsonFile(CRED_STATE_PATH) || {};
+  const mark = st.lastAttemptAt || '';
+  if (runCreditsBg('claim', mark)) {
+    notifyUser('Qoder Credits', '正在领取今日 100 Credits…');
+  }
+}
+
+// autoClaim 打开时挂一个每小时运行的 LaunchAgent，Qoder 没启动也能领取；关闭即卸载。
+function syncCreditAgent() {
+  try {
+    const fm = $.NSFileManager.defaultManager;
+    const helper = creditHelperPath();
+    if (!state.autoClaim || !helper) {
+      if (fm.fileExistsAtPath(CRED_AGENT_PLIST)) {
+        sh('/bin/launchctl bootout gui/$(/usr/bin/id -u) ' + q(CRED_AGENT_PLIST) + ' 2>/dev/null');
+        sh('/bin/rm -f ' + q(CRED_AGENT_PLIST));
+      }
+      return;
+    }
+    const logPath = xmlEscape(SETTINGS_DIR + '/credits-agent.log');
+    const plist = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
+      '<plist version="1.0"><dict>\n' +
+      '<key>Label</key><string>com.qoder.meter.credits</string>\n' +
+      '<key>ProgramArguments</key><array>\n' +
+      '<string>/usr/bin/python3</string>\n' +
+      '<string>' + xmlEscape(helper) + '</string>\n' +
+      '<string>claim</string>\n' +
+      '<string>--auto</string>\n' +
+      '</array>\n' +
+      '<key>RunAtLoad</key><true/>\n' +
+      '<key>StartInterval</key><integer>3600</integer>\n' +
+      '<key>ProcessType</key><string>Background</string>\n' +
+      '<key>StandardOutPath</key><string>' + logPath + '</string>\n' +
+      '<key>StandardErrorPath</key><string>' + logPath + '</string>\n' +
+      '</dict></plist>\n';
+    sh('/bin/mkdir -p ' + q(SETTINGS_DIR));
+    const s = $.NSString.alloc.initWithString(plist);
+    s.writeToFileAtomicallyEncodingError(CRED_AGENT_PLIST, true, $.NSUTF8StringEncoding, null);
+    sh('/bin/launchctl bootout gui/$(/usr/bin/id -u) ' + q(CRED_AGENT_PLIST) + ' 2>/dev/null');
+    sh('/bin/launchctl bootstrap gui/$(/usr/bin/id -u) ' + q(CRED_AGENT_PLIST) + ' 2>/dev/null');
+  } catch (e) {
+    logError('syncCreditAgent', e);
+  }
+}
+
+function toggleAutoClaim() {
+  state.autoClaim = !state.autoClaim;
+  saveSettings();
+  syncCreditAgent();
+  buildMenu();
+  updateSettingsControls();
+}
+
+function creditResultNotify(outcome, credit, message) {
+  const day = creditDayKey();
+  const key = day + '|' + outcome;
+  if (state.creditNotifiedKey === key) return;
+  state.creditNotifiedKey = key;
+  if (outcome === 'claimed') {
+    const amount = (credit === null || credit === undefined || credit === '') ? 100 : credit;
+    notifyUser('Qoder Credits', '已领取 ' + amount + ' Credits（今日）');
+  } else if (outcome === 'already') {
+    notifyUser('Qoder Credits', '今日 100 Credits 已经领过了');
+  } else if (outcome === 'sign_in_expired' || outcome === 'not_logged_in') {
+    notifyUser('Qoder Credits', 'Qoder 登录已失效，请在菜单重新登录');
+  } else if (outcome === 'failed') {
+    notifyUser('Qoder Credits', '领取失败：' + (message || '未知错误'));
+  } else if (outcome === 'inactive') {
+    log('credit inactive: ' + (message || ''));
+  }
+}
+
+function creditButtonTitle() {
+  if (state.creditPendingLogin) return '等待登录…';
+  if (state.creditSignInExpired) return '重新登录';
+  if (!state.creditLoggedIn) return '登录 Qoder';
+  return state.creditClaimedToday ? '今日已领' : (state.creditBusy ? '领取中…' : '立即领取');
+}
+
+function creditButtonEnabled() {
+  if (state.creditPendingLogin) return true;
+  if (state.creditSignInExpired || !state.creditLoggedIn) return true;
+  return !state.creditClaimedToday && !state.creditBusy;
+}
+
+function creditButtonTip() {
+  if (!state.creditLoggedIn) return '登录后每天自动领取 100 Credits';
+  return (state.creditEmail || '已登录') + ' · ' +
+    (state.creditClaimedToday ? '今日已领 100 Credits' : '每日 10:00 后可领');
+}
+
+function tickCredits() {
+  const now = Date.now();
+  if (now - state.creditTickAt < 5000) return;
+  state.creditTickAt = now;
+  const prevLogin = state.creditLoginStatus;
+  const prevOutcome = state.creditLastOutcome;
+  const st = refreshCreditState();
+  const lastAttempt = st.lastAttemptAt || '';
+
+  if (prevLogin === 'pending' && state.creditLoginStatus !== 'pending') {
+    state.creditBusy = false;
+    if (state.creditLoginStatus === 'success') {
+      state.creditNotifiedKey = '';
+      notifyUser('Qoder Credits', '登录成功，开始领取今日 100 Credits');
+      claimCreditsNow();
+    } else if (state.creditLoginStatus === 'error') {
+      notifyUser('Qoder Credits', state.creditLoginMessage || '登录失败，请重试');
+    }
+  }
+
+  if (state.creditBusy) {
+    const mark = state.creditBusyMark || '';
+    if (mark.indexOf('login') === 0) {
+      if (state.creditLoginStatus === 'success' || state.creditLoginStatus === 'error') {
+        state.creditBusy = false;
+      }
+    } else if (lastAttempt && lastAttempt !== mark) {
+      state.creditBusy = false;
+      const outcome = st.outcome || '';
+      if (outcome && outcome !== prevOutcome) {
+        creditResultNotify(outcome, st.credit, st.message || '');
+      }
+    }
+    if (state.creditBusy && now - state.creditBusyAt > 120000) {
+      state.creditBusy = false;
+      log('credit task timed out');
+    }
+  }
+
+  if (!state.autoClaim || !state.creditLoggedIn || state.creditPendingLogin ||
+      state.creditSignInExpired || state.creditBusy) {
+    state.creditLastOutcome = state.creditOutcome;
+    return;
+  }
+  if (state.creditClaimedToday) {
+    state.creditLastOutcome = state.creditOutcome;
+    return;
+  }
+  if (state.creditNextCheckAt && now < state.creditNextCheckAt) {
+    state.creditLastOutcome = state.creditOutcome;
+    return;
+  }
+  if (state.creditAutoAt && now - state.creditAutoAt < 10 * 60 * 1000) {
+    state.creditLastOutcome = state.creditOutcome;
+    return;
+  }
+  state.creditAutoAt = now;
+  if (runCreditsBg('claim', lastAttempt)) {
+    log('credit auto claim started');
+  }
+  state.creditLastOutcome = state.creditOutcome;
 }
 
 /* --------------------------------------------------------------- db query */
@@ -2833,6 +3135,14 @@ function buildMenu() {
   menu.addItem(menuItem('用量统计…', 'openStats:', null, null));
   menu.addItem($.NSMenuItem.separatorItem);
 
+  const creditItem = menuItem(creditMenuTitle(), creditMenuAction(), null, null);
+  if ((state.creditClaimedToday && !state.creditSignInExpired) || state.creditBusy) {
+    creditItem.setEnabled(false);
+  }
+  menu.addItem(creditItem);
+  menu.addItem(menuItem('每天自动领取 100 Credits', 'toggleAutoClaim:', state.autoClaim, null));
+  menu.addItem($.NSMenuItem.separatorItem);
+
   menu.addItem(menuItem(state.panelHidden ? '显示状态条' : '隐藏状态条', 'togglePanel:', null, null));
   menu.addItem($.NSMenuItem.separatorItem);
   menu.addItem(menuItem('自动跟随当前打开的会话', 'autoFollow:', state.pinned ? false : true, null));
@@ -2961,7 +3271,11 @@ function menuSignature() {
     state.statsMode + '#' + state.statsRange + '#' + state.statsGroup + '#' +
     statsViewModel(state.statsView) + '#' +
     (state.statsHidden ? 1 : 0) + '#' +
-    (state.autoStart ? 1 : 0) + '#' + (state.closeWithQoder ? 1 : 0);
+    (state.autoStart ? 1 : 0) + '#' + (state.closeWithQoder ? 1 : 0) + '#' +
+    (state.autoClaim ? 1 : 0) + '#' + (state.creditLoggedIn ? 1 : 0) + '#' +
+    (state.creditClaimedToday ? 1 : 0) + '#' + (state.creditPendingLogin ? 1 : 0) + '#' +
+    (state.creditSignInExpired ? 1 : 0) + '#' + (state.creditBusy ? 1 : 0) + '#' +
+    state.creditOutcome;
 }
 
 function refreshMenu() {
@@ -3122,7 +3436,7 @@ function fetchLatestRelease() {
 
 function buildSettingsWindow() {
   settingsPanel = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-    $.NSMakeRect(0, 0, 460, 576),
+    $.NSMakeRect(0, 0, 460, 638),
     3, // titled + closable
     $.NSBackingStoreBuffered,
     false
@@ -3133,48 +3447,48 @@ function buildSettingsWindow() {
   settingsPanel.setLevel(26);
 
   const root = settingsPanel.contentView;
-  settingsHeaderBox = box([20, 524, 28, 28], T.greenTint, 8, 0, null);
+  settingsHeaderBox = box([20, 586, 28, 28], T.greenTint, 8, 0, null);
   root.addSubview(settingsHeaderBox);
-  settingsHeaderIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26.5, 530.5, 15, 15));
+  settingsHeaderIcon = $.NSImageView.alloc.initWithFrame($.NSMakeRect(26.5, 592.5, 15, 15));
   const headerImage = $.NSImage.imageWithSystemSymbolNameAccessibilityDescription('gauge', 'Qoder Meter');
   if (headerImage && !headerImage.isNil()) {
     settingsHeaderIcon.setImage(headerImage);
     try { settingsHeaderIcon.setContentTintColor(T.green); } catch (e) {}
   }
   root.addSubview(settingsHeaderIcon);
-  root.addSubview(sLabel('Qoder Meter', [56, 528, 250, 20], 16, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('状态条显示、启动与会话跟随', [56, 508, 250, 14], 11,
+  root.addSubview(sLabel('Qoder Meter', [56, 590, 250, 20], 16, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('状态条显示、启动与会话跟随', [56, 570, 250, 14], 11,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
 
-  settingsUpdateButton = sButton('检查更新', [314, 524, 126, 28], 'checkUpdates:');
+  settingsUpdateButton = sButton('检查更新', [314, 586, 126, 28], 'checkUpdates:');
   try {
     settingsUpdateButton.setFont($.NSFont.systemFontOfSize(12));
     settingsUpdateButton.setToolTip('点击后访问 GitHub Releases 检查新版本');
   } catch (e) {}
   root.addSubview(settingsUpdateButton);
-  settingsUpdateLabel = sLabel('v' + appVersion(), [310, 508, 130, 14], 11,
+  settingsUpdateLabel = sLabel('v' + appVersion(), [310, 570, 130, 14], 11,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor);
   try { settingsUpdateLabel.setAlignment(2); } catch (e) {}
   root.addSubview(settingsUpdateLabel);
 
-  root.addSubview(sLabel('启动与退出', [22, 478, 300, 16], 12, $.NSFontWeightSemibold));
-  settingsAutoStart = sCheckbox('随 Qoder 自动启动', [22, 448, 416, 22],
+  root.addSubview(sLabel('启动与退出', [22, 540, 300, 16], 12, $.NSFontWeightSemibold));
+  settingsAutoStart = sCheckbox('随 Qoder 自动启动', [22, 510, 416, 22],
     'settingsToggleAutoStart:', state.autoStart);
-  settingsClose = sCheckbox('Qoder 退出时关闭', [22, 420, 416, 22],
+  settingsClose = sCheckbox('Qoder 退出时关闭', [22, 482, 416, 22],
     'settingsToggleClose:', state.closeWithQoder);
   root.addSubview(settingsAutoStart);
   root.addSubview(settingsClose);
-  root.addSubview(sSeparator(408));
+  root.addSubview(sSeparator(470));
 
-  root.addSubview(sLabel('显示', [22, 382, 300, 16], 12, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('显示位置', [22, 350, 100, 16], 12));
+  root.addSubview(sLabel('显示', [22, 444, 300, 16], 12, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('显示位置', [22, 412, 100, 16], 12));
   settingsPosPopup = sPopup(['侧边栏卡片（推荐）', '窗口标题栏（融入顶部）', '窗口上方（贴外）', '窗口下方（贴外）'],
     state.layout === 'sidebar' ? 0 : (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)),
-    [142, 344, 296, 28], 'settingsPosChanged:');
+    [142, 406, 296, 28], 'settingsPosChanged:');
   try { settingsPosPopup.setToolTip('全屏时贴外形态会收成屏幕边缘细线，悬停展开'); } catch (e) {}
   root.addSubview(settingsPosPopup);
 
-  root.addSubview(sLabel('字号', [22, 314, 100, 16], 12));
+  root.addSubview(sLabel('字号', [22, 376, 100, 16], 12));
   let fontIndex = 0;
   const fontLabels = [];
   for (let i = 0; i < FONT_SIZES.length; i++) {
@@ -3182,23 +3496,23 @@ function buildSettingsWindow() {
     if (FONT_SIZES[i].id === state.fontSize) fontIndex = i;
   }
   settingsFontPopup = sPopup(fontLabels, fontIndex,
-    [142, 308, 296, 28], 'settingsFontChanged:');
+    [142, 370, 296, 28], 'settingsFontChanged:');
   try { settingsFontPopup.setToolTip('作用于标题栏、窗口上方和下方状态条；宽度会随字号自动调整'); } catch (e) {}
   root.addSubview(settingsFontPopup);
 
-  root.addSubview(sLabel('外观', [22, 278, 100, 16], 12));
+  root.addSubview(sLabel('外观', [22, 340, 100, 16], 12));
   settingsThemePopup = sPopup(SKIN_NAMES, Math.max(0, SKIN_IDS.indexOf(state.theme)),
-    [142, 272, 296, 28], 'settingsThemeChanged:');
+    [142, 334, 296, 28], 'settingsThemeChanged:');
   try { settingsThemePopup.setToolTip('自动会跟随 Qoder 的深浅色；Qoder 未设置时跟随系统'); } catch (e) {}
   root.addSubview(settingsThemePopup);
 
-  settingsBottomAutoHide = sCheckbox('下方空间不足时自动隐藏', [22, 240, 416, 22],
+  settingsBottomAutoHide = sCheckbox('下方空间不足时自动隐藏', [22, 302, 416, 22],
     'settingsBottomAutoHideToggle:', state.bottomAutoHide);
   root.addSubview(settingsBottomAutoHide);
-  root.addSubview(sSeparator(226));
+  root.addSubview(sSeparator(288));
 
-  root.addSubview(sLabel('显示内容', [22, 198, 180, 16], 12, $.NSFontWeightSemibold));
-  root.addSubview(sLabel('Token 单位', [262, 198, 76, 16], 11,
+  root.addSubview(sLabel('显示内容', [22, 260, 180, 16], 12, $.NSFontWeightSemibold));
+  root.addSubview(sLabel('Token 单位', [262, 260, 76, 16], 11,
     $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
   let tokenUnitIndex = 0;
   const tokenUnitLabels = [];
@@ -3207,7 +3521,7 @@ function buildSettingsWindow() {
     if (TOKEN_UNITS[i].id === state.tokenUnit) tokenUnitIndex = i;
   }
   settingsTokenUnitPopup = sPopup(tokenUnitLabels, tokenUnitIndex,
-    [340, 190, 98, 28], 'settingsTokenUnitChanged:');
+    [340, 252, 98, 28], 'settingsTokenUnitChanged:');
   try { settingsTokenUnitPopup.setToolTip('状态条和用量统计中的 Token 缩写单位'); } catch (e) {}
   root.addSubview(settingsTokenUnitPopup);
   settingsFieldChecks = [];
@@ -3215,19 +3529,28 @@ function buildSettingsWindow() {
     const field = DISPLAY_FIELDS[i];
     const col = i % 5;
     const row = Math.floor(i / 5);
-    const cb = sFieldCheckbox(field.label, [22 + col * 84, row === 0 ? 164 : 136, 80, 22],
+    const cb = sFieldCheckbox(field.label, [22 + col * 84, row === 0 ? 226 : 198, 80, 22],
       i, !!state.display[field.id]);
     settingsFieldChecks.push(cb);
     root.addSubview(cb);
   }
-  root.addSubview(sSeparator(122));
+  root.addSubview(sSeparator(184));
 
-  root.addSubview(sLabel('会话', [22, 96, 200, 16], 12, $.NSFontWeightSemibold));
-  settingsFollow = sCheckbox('自动跟随当前打开的会话', [22, 66, 416, 22],
+  root.addSubview(sLabel('会话', [22, 158, 200, 16], 12, $.NSFontWeightSemibold));
+  settingsFollow = sCheckbox('自动跟随当前打开的会话', [22, 128, 416, 22],
     'settingsFollowToggle:', state.pinned ? false : true);
   root.addSubview(settingsFollow);
   root.addSubview(sLabel('状态条宽度随内容与字号自适应；关闭跟随后可在菜单选择并固定会话。',
-    [22, 44, 416, 14], 11, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+    [22, 106, 416, 14], 11, $.NSFontWeightRegular, $.NSColor.secondaryLabelColor));
+
+  root.addSubview(sSeparator(92));
+  root.addSubview(sLabel('Credits 领取', [22, 68, 300, 16], 12, $.NSFontWeightSemibold));
+  settingsAutoClaim = sCheckbox('每天自动领取 100 Credits', [22, 40, 280, 22],
+    'settingsAutoClaimToggle:', state.autoClaim);
+  try { settingsAutoClaim.setToolTip('每天 10:00（UTC+8）后自动领取 Qoder 的 100 通用 Credits，需要先在右侧登录'); } catch (e) {}
+  root.addSubview(settingsAutoClaim);
+  settingsCreditButton = sButton('登录 Qoder', [330, 38, 108, 26], 'settingsCreditAction:', null);
+  root.addSubview(settingsCreditButton);
 
   root.addSubview(sButton('重置当前位置', [22, 8, 150, 28], 'resetPosition:', null));
   root.addSubview(sButton('用量统计', [196, 8, 110, 28], 'openStats:', null));
@@ -3242,6 +3565,12 @@ function updateSettingsControls() {
     settingsClose.setState(state.closeWithQoder ? 1 : 0);
     settingsFollow.setState(state.pinned ? 0 : 1);
     settingsBottomAutoHide.setState(state.bottomAutoHide ? 1 : 0);
+    if (settingsAutoClaim) settingsAutoClaim.setState(state.autoClaim ? 1 : 0);
+    if (settingsCreditButton) {
+      settingsCreditButton.setTitle(creditButtonTitle());
+      settingsCreditButton.setEnabled(creditButtonEnabled());
+      try { settingsCreditButton.setToolTip(creditButtonTip()); } catch (e) {}
+    }
     settingsPosPopup.selectItemAtIndex(state.layout === 'sidebar' ? 0 :
       (state.layout === 'title' ? 1 : (state.layout === 'top' ? 2 : 3)));
     if (settingsFontPopup) {
@@ -3274,6 +3603,7 @@ function updateSettingsControls() {
 }
 
 function showSettings() {
+  refreshCreditState();
   if (!settingsPanel) buildSettingsWindow();
   updateSettingsControls();
   try {
@@ -4240,6 +4570,54 @@ ObjC.registerSubclass({
         buildMenu();
       }
     },
+    'loginCredits:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        startCreditLogin();
+        buildMenu();
+        updateSettingsControls();
+      }
+    },
+    'showCreditLogin:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        showCreditLogin();
+      }
+    },
+    'claimCreditsNow:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        claimCreditsNow();
+        buildMenu();
+        updateSettingsControls();
+      }
+    },
+    'toggleAutoClaim:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        toggleAutoClaim();
+      }
+    },
+    'settingsAutoClaimToggle:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        state.autoClaim = Number(sender.state) === 1;
+        saveSettings();
+        syncCreditAgent();
+        buildMenu();
+        updateSettingsControls();
+      }
+    },
+    'settingsCreditAction:': {
+      types: ['void', ['id']],
+      implementation: function (sender) {
+        refreshCreditState();
+        if (!state.creditLoggedIn || state.creditPendingLogin) startCreditLogin();
+        else claimCreditsNow();
+        buildMenu();
+        updateSettingsControls();
+      }
+    },
     'openSettings:': {
       types: ['void', ['id']],
       implementation: function (sender) {
@@ -4769,6 +5147,8 @@ function main() {
   applyFontScale();
   loadModelLabels();
   loadStatsCache();
+  refreshCreditState();
+  syncCreditAgent();
 
   try {
     const fm = $.NSFileManager.defaultManager;
@@ -4792,6 +5172,11 @@ function main() {
     counter++;
     if (counter % 3 === 0) refreshData();
     tick();
+    try {
+      tickCredits();
+    } catch (e) {
+      logError('tickCredits', e);
+    }
     if (counter % 8 === 0) refreshMenu();
   });
 

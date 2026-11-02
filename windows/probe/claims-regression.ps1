@@ -11,7 +11,7 @@ foreach($name in @('lib-config-layout','lib-ui','lib-account')){. (Join-Path $ro
 function Get-QmScale {return 1.0}
 $script:CFG=New-QmConfig;$script:CFG.skin='paper'
 $script:QM_CLAIMS_PATH=Join-Path $script:QM_SETTINGSD 'claims.json';$script:QM_CLAIMS=$null
-$script:QM_VERSION='1.4.0-win.3';$script:QM_SHUTDOWN=$false
+$script:QM_VERSION='2.1.0';$script:QM_SHUTDOWN=$false
 $script:UI=@{claimsWin=$null}
 $script:ACCOUNT=$null
 $script:QM_CLAIMS_MAX=400

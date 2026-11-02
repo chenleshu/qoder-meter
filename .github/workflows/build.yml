@@ -24,6 +24,7 @@ jobs:
         run: |
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' QoderMeter.app/Contents/Info.plist
           test -x QoderMeter.app/Contents/MacOS/applet
+          test -f QoderMeter.app/Contents/Resources/credits.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

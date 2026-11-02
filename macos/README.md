@@ -1,6 +1,6 @@
 # Qoder Meter for macOS
 
-Qoder 的第三方伴生状态条，使用 macOS 自带的 JXA + AppKit 实现。只读本地会话数据，不修改 Qoder 客户端；默认离线，手动检查更新时才访问 GitHub。
+Qoder 的第三方伴生状态条，使用 macOS 自带的 JXA + AppKit 实现。只读本地会话数据，不修改 Qoder 客户端。默认不联网；手动检查更新时访问 GitHub，登录 Meter 账户后才会访问 Qoder 开放接口用于每日 Credits 领取。
 
 [项目总览](../README.md) · [Windows 版](../windows/README.md) · [Releases](https://github.com/chenleshu/qoder-meter/releases)
 
@@ -12,9 +12,10 @@ Qoder 的第三方伴生状态条，使用 macOS 自带的 JXA + AppKit 实现�
 - **测量与显示一致**：每个指标使用独立文本控件，分隔线占用的宽度计入布局。关闭字段或窄窗口隐藏字段后重新生成相邻分隔线，不留下首尾孤立线；单字段不加分隔线，统计和设置按钮不加尾线。
 - **窄宽整项精简**：先从工具、请求等后部指标开始裁减；空间进一步不足时缩短或隐藏标题及其他字段。完整数值可在悬停提示中查看。
 - **稳定条形宽度**：字段与状态胶囊按样本文案预留容量，运行中的数字、标题、TPS 和计时只替换控件文字，不改变条形外宽或相邻字段位置；延迟与生成时长按 `59m 59s` 预留，超长值在自身控件内省略。外宽只在字段开关、字号、布局、可用空间或屏幕变化时重算。
-- **可复现验证**：新增跨平台离线布局回归、统计口径与统计面板离线测试，以及仅在 Mac 图形会话运行的原生 PNG 渲染探针。侧栏卡片和设置布局未因本次更新改变；统计面板的图文仪表盘见第一条。
+- **每日 100 Credits 自动领取**：设置与菜单栏新增 Credits 入口。首次点击走 Qoder 官方设备授权流程（浏览器扫码登录，PKCE，令牌以 `0600` 存于 `~/Library/Application Support/QoderMeter/qoder-credits.json`），登录后状态条菜单显示「今日已领 100 Credits ✓」。开启「每天自动领取 100 Credits」会安装一个每小时运行一次的独立 LaunchAgent `com.qoder.meter.credits`，Qoder 未启动也能领取；关闭开关即卸载该任务。领取脚本 `src/credits.py` 只用 Python 标准库，且只匹配 `actionType=CLAIM_BENEFIT`、`benefit.kind=CREDITS`、`amount=100` 的活动，其他奖励不会被误领。菜单项、通知与设置按钮文案随登录 / 领取中 / 已领 / 登录失效四种状态变化。
+- **可复现验证**：新增跨平台离线布局回归、统计口径与统计面板离线测试、Credits 状态机离线回归，以及仅在 Mac 图形会话运行的原生 PNG 渲染探针。侧栏卡片和统计面板布局未因本次更新改变；设置窗口为领取项增高了 62pt。
 
-当前更新位于 `restructure` 分支，源码版本号仍为 `1.5.2`；本次没有发布新安装包。已有 Release 不一定包含这些修改。Windows 的账户余额与权益领取是独立功能，**本次没有移植到 macOS**。
+这批更新位于 `restructure` 分支，源码版本号升到 **2.1.0**（`build.sh` 写入 `CFBundleShortVersionString=2.1.0`、`CFBundleVersion=16`）；GitHub 上最新的公开安装包仍是 v1.5.2，本次源码更新不等于已发布新包。macOS 的 Credits 领取是独立实现：只读取本机 Qoder 的设备身份信息来签名请求，登录必须由用户在 Meter 内主动完成，Windows 那种「直接复用本机 Qoder 登录态」和余额查询**仍未移植到 macOS**。
 
 ## 界面预览
 
@@ -59,7 +60,7 @@ open QoderMeter.app
 
 默认安装位置为 `~/Applications/QoderMeter.app`；可通过 `QODER_METER_INSTALL_DIR` 指定其他目录。升级前先退出旧的 Qoder Meter，再重新构建、安装，避免仍在运行旧副本。
 
-运行和构建不依赖 Node/Python；构建使用 macOS 自带的 `osacompile`、`PlistBuddy` 和 `codesign`。用量统计另外需要可用的 `jq`，可用 `command -v jq` 检查；缺失时自行安装，例如 `brew install jq`。缺少 `jq` 的空统计结果不代表没有消耗。
+运行和构建不依赖 Node；构建使用 macOS 自带的 `osacompile`、`PlistBuddy` 和 `codesign`。用量统计另外需要可用的 `jq`，可用 `command -v jq` 检查；缺失时自行安装，例如 `brew install jq`。缺少 `jq` 的空统计结果不代表没有消耗。Credits 领取另外需要 `/usr/bin/python3`，未登录领取时不会被调用。
 
 应用使用 ad-hoc 签名，未经过 Apple 公证。首次被系统阻止时，可在「系统设置 → 隐私与安全性」中检查并允许，或右键应用选择「打开」。
 
@@ -81,6 +82,7 @@ open QoderMeter.app
 - TPS、本轮、总计、Token、积分、请求、工具、延迟、状态、标题逐项开关。标题字段不在标题栏紧凑模式显示。
 - Token 单位在 `b / m / k` 与 `亿 / 万` 之间切换，状态条、卡片和统计面板同步生效。
 - 自动跟随当前会话，或从菜单选择并固定会话。恢复自动跟随后解除固定；通常约 1–2 秒更新，读取大型日志时可能更慢。
+- 「Credits 领取」：每天自动领取 100 Credits 开关，以及右侧随状态变化的按钮（登录 Qoder / 立即领取 / 领取中… / 今日已领 / 重新登录）。按钮为「登录 Qoder」时不会发起任何网络请求。
 
 条形宽度由启用字段、字号和可用空间计算，数据刷新不会改变外框或列位置。窄窗口隐藏整个字段，不在分隔线中间截断；字段内部遇到超过预留宽度的长值仍会省略。悬停提示保留完整摘要，不应仅凭被隐藏的字段判断数据缺失。
 
@@ -111,6 +113,14 @@ open QoderMeter.app
 
 「Qoder 退出时关闭」可单独设置。主动退出 Meter 后，本次 Qoder 进程生命周期内不会被守护反复拉起。应用位置改变后，应关闭再开启自动启动，以更新守护路径。
 
+Credits 领取有自己的一套常驻机制，与上面的启动守护互不影响：
+
+- `~/Library/LaunchAgents/com.qoder.meter.credits.plist`：开关打开时安装，每小时 `claim --auto` 一次，Qoder 未运行也能领取；关闭开关或卸载时移除。
+- `~/Library/Application Support/QoderMeter/qoder-credits.json`：设备令牌与刷新令牌，权限 `0600`，到期前自动用官方的 `deviceToken/refresh` 续期。
+- `~/Library/Application Support/QoderMeter/qoder-credits-state.json`：最近一次结果（`claimed` / `already` / `inactive` / `sign_in_expired` / `failed`）、当日是否已领、下一次检查时间。
+
+Meter 自身运行时也会按这张状态表补领一次：距上次尝试已过 `nextCheckAt`、且距上一次自动触发超过 10 分钟才会发起，界面不会每分钟去敲接口。
+
 ## 数据与指标口径
 
 | 来源 | 用途 |
@@ -136,7 +146,9 @@ Qoder 数据均为只读；Meter 自己的设置和统计缓存存放在 `~/Libr
 
 ## 隐私与联网
 
-macOS 版不读取账号登录令牌，没有余额查询或权益领取。默认不联网、不包含遥测，也不上传会话标题、消息、Token 或积分；仅手动「检查更新」时请求 GitHub Release 元数据，随后由用户选择是否打开下载页面。更新检查不会自动安装应用。
+macOS 版不读取 Qoder 的会话令牌，不查询余额，也不上传会话标题、消息、Token 或积分；不包含遥测。联网只发生在两处：手动「检查更新」时读取 GitHub Release 元数据（不会自动安装），以及 Credits 领取时访问 `openapi.qoder.sh` 的活动列表与领取接口。后者在未登录前完全不会发起：`autoClaim` 默认为开，但没有 `qoder-credits.json` 就是一条网络请求都不发。
+
+登录后 Meter 会保存设备令牌与刷新令牌（`qoder-credits.json`，权限 `0600`），请求头里的机器身份由 Qoder 自带的 `runtime-info` 本机生成，令牌不会写进日志或输出。`uninstall.sh --purge` 会连同该凭证目录一起删除；不带 `--purge` 时保留设置与凭证，卸载脚本仍会移除 `com.qoder.meter.watch` 和 `com.qoder.meter.credits` 两个 LaunchAgent。
 
 本地统计会写入 Meter 的 `stats-cache.json`，因此不是「所有数据只在内存中」。卸载时可选择保留或删除设置、缓存和日志。
 
@@ -147,20 +159,24 @@ macOS 版不读取账号登录令牌，没有余额查询或权益领取。默�
 ```bash
 node --check src/main.js
 node --check render-bar-probe.js
-node --test macos/*.test.cjs   # 在仓库根目录一次跑完三组离线回归
+/usr/bin/python3 -m py_compile src/credits.py
+node --test macos/*.test.cjs   # 在仓库根目录一次跑完四组离线回归
 node bar-separators.test.cjs
 node stats-grouping.test.cjs
 node stats-window.test.cjs
+node credits.test.cjs
 ```
 
 本次已通过 **196,608 个布局组合、12,864 次真实源码 mock 控件构建**：覆盖全部 1,024 种字段开关、四档字号、两种 Token 单位、窄宽窗口和五种皮肤，并额外校验超长数值注入后外宽、列位置和控件框架不变。测试拒绝非渲染 I/O，不执行应用主入口，不读取用户数据。它验证几何和控件组织，**不能替代 AppKit 字体、绘制与窗口行为实测**。
 
-新增的两组统计回归同样在 VM 中加载真实源码、替换 AppKit 控件，不读取 Qoder 数据、不联网：
+三组回归同样在 VM 中加载真实源码、替换 AppKit 控件，不读取 Qoder 数据、不联网：
 
 - `stats-grouping.test.cjs`（123 项）：按日 / 周 / 月合并、跨年周界、模型合并、估算标记、排序和空数据回退；另覆盖 `statsView` 默认值、非法值回退与保存 / 重开往返，四条固定自动摘要与「上期为 0 不做除法」「空数据 → 暂无用量记录」「主力模型」「全部窗口的日均」，趋势最多 12 期与升序 / 分组切换，模型占比（积分优先、积分为 0 转 Token），以及每页 6 期的明细分页与越界夹紧。
 - `stats-window.test.cjs`（282 项）：总览与明细两种视图下的面板构建、四张摘要卡、12 根 `NSBox` 趋势柱、模型占比条、自动摘要文案与分节标题不重叠、刷新 / 设置 / 更多操作 / 关闭出口、分组按钮几何、分页与直接模式文案、周月工具提示、空状态和窄屏不越界。
 
-两组测试本次在 Windows 上通过 Qoder 自带的 Electron（`ELECTRON_RUN_AS_NODE=1`）执行，属于逻辑与控件树验证，**未在 Mac 上运行 AppKit，也未截取新版统计面板**。
+- `credits.test.cjs`（60 项）：`autoClaim` 的读盘 / 落盘往返、UTC+8 10:00 日界归属、四种登录与领取状态下的菜单标题和动作路由、LaunchAgent 在「关闭开关 / 缺少 `credits.py`」时的 `bootout` + 删除与「开启」时 plist 内容（`claim --auto`、`StartInterval 3600`、`bootstrap`）、自动领取的闸门（开关关闭、今日已领、`nextCheckAt` 未到、10 分钟 UI 节流、任务挂起两分钟后释放且不补发）、登录成功后的即时领取与「同一结果同一天只通知一次」、设置窗口里领取开关与按钮的文案 / 可用性联动、以及领取结果变化会改变菜单签名（保证菜单真的重建）。测试把 shell 调用、文件写入和通知全部记录而不执行，**不会触发真实领取，也不读取本机凭证**。
+
+本次四组回归（含 `credits.test.cjs`）在 macOS 上以 `node --test macos/*.test.cjs` 全绿；`src/credits.py` 通过语法编译，并只用 `status` 子命令做过只读校验，没有在本机测试里发起领取。前两组统计回归此前也在 Windows 的 Qoder 自带 Electron（`ELECTRON_RUN_AS_NODE=1`）上跑通过。三者都属于逻辑与控件树验证，**未在 Mac 上运行 AppKit 实测，也未截取新版统计面板与 Credits 设置界面**。
 
 在 Mac 的已登录图形会话中生成原生条形示例图：
 
@@ -186,11 +202,13 @@ osascript -l JavaScript "$PWD/render-bar-probe.js" \
 
 首次扫描大型日志可能短暂停顿；统计依赖本地日志完整性和 `jq`。日 / 周 / 月汇总是对本地按日数据再做分组，受本机时区、日志留存范围影响，跨设备或已删除的日志不会计入，首尾不完整的周 / 月只反映已有记录。趋势柱、模型占比条和自动摘要都只读取本机 JSONL 聚合结果：自动摘要的「上一周期」按等长紧邻窗口计算，上期为 0 时不做除法；「全部」以当前缓存的合法日期为界，不代表账号的跨设备账单。macOS 条形布局和统计仪表盘的本次修改已完成离线回归，但尚未在真实 Mac 上完成原生构建、运行、悬停 / 固定行为与新版截图验收。
 
+Credits 领取的边界：需要本机存在 `/usr/bin/python3`（macOS 的命令行开发者工具 shim）和已安装的 `/Applications/Qoder.app/Contents/Resources/umid/runtime-info`，缺任一项时状态条只提示「找不到领取组件」，不会静默改走别的路径。领取依赖 Qoder 账号当前存在 `CLAIM_BENEFIT` + `CREDITS` + `amount=100` 的在有效期活动，活动结束或从未出现在列表时结果为 `inactive`，按接口给出的下一次时间退避。macOS 侧不查询余额、不显示套餐构成、没有领取历史列表（Windows 有），只有当日状态与最近一次结果；换用其他设备或客户端的领取，这里读不到。设备授权登录有 15 分钟超时，令牌约在过期前 10 分钟自动续期，续期失败即标记登录失效并停止自动领取，直到用户重新登录。
+
 ## 卸载
 
 ```bash
-./uninstall.sh          # 移除默认位置应用和 LaunchAgent，保留设置
-./uninstall.sh --purge  # 同时删除 Meter 设置、缓存和日志
+./uninstall.sh          # 移除默认位置应用和两个 LaunchAgent（watch + credits），保留设置
+./uninstall.sh --purge  # 同时删除 Meter 设置、缓存、日志和 Qoder 登录凭证
 ```
 
 自定义安装目录中的应用需自行删除；Qoder 本身及其会话数据不受影响。
